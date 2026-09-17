@@ -29,7 +29,7 @@ export const RIDER_RATE_NOTE: Record<RiderId, string> = {
   hosp: `min(${RIDER_FACTORS.hospDaysCap}, ${RIDER_FACTORS.hospDaysBase} + ${RIDER_FACTORS.hospDaysSlope} × 사망률)일 (임시)`,
 };
 
-export interface RiderRow { id: RiderId; label: string; kind: "lump" | "daily"; unitLabel: string; on: boolean; amount: number; monthly: number; per100k: number; termYears: number; payYears: number }
+export interface RiderRow { id: RiderId; label: string; kind: "lump" | "daily"; unitLabel: string; on: boolean; amount: number; monthly: number; per100k: number; termYears: number; payYears: number; exit: number[]; event: number[]; wait: number; note: string }
 
 /** 특약별 월 보험료. 보험기간은 100세 만기(사망 담보 외 공통), 납입기간·이율·사업비는 주계약(현재 상품·가정 세트)을 따른다 */
 export function riderPremiums(s: DesignState): RiderRow[] {
@@ -53,7 +53,7 @@ export function riderPremiums(s: DesignState): RiderRow[] {
     const pr = riderPremium(k, p.age, m, 12, a.expenses, b.wait);
     const per100k = Math.round(pr.gross * 1e5);            // 기준금액 10만원당 월 보험료(원)
     const monthly = per100k * (r.amount / 1e5);
-    return { id: d.id, label: d.label, kind: d.kind, unitLabel: d.unitLabel, on: r.on, amount: r.amount, monthly, per100k, termYears: n, payYears: m };
+    return { id: d.id, label: d.label, kind: d.kind, unitLabel: d.unitLabel, on: r.on, amount: r.amount, monthly, per100k, termYears: n, payYears: m, exit: b.exit, event: b.event, wait: b.wait, note: RIDER_RATE_NOTE[d.id] };
   });
 }
 
