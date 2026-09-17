@@ -2,7 +2,7 @@
 import { Fragment, useRef, useState, type RefObject } from "react";
 import { useDesign } from "@/components/design-provider";
 import { FormulaHelp } from "@/components/formula-help";
-import { Button, Field, ManwonInput, onBackdropClick } from "@/components/ui";
+import { Button, Field, MillionInput, onBackdropClick } from "@/components/ui";
 import { PRESETS } from "@/lib/engine";
 import { won } from "@/lib/format";
 import { recommend } from "@/lib/recommend";
@@ -40,10 +40,10 @@ export function FinanceButton({ compact = false, dlgRef }: { compact?: boolean; 
         <p className="mt-1 text-xs text-navy/60">설계는 기준보험금 1억으로 시작합니다. 재무 정보를 넣으면 필요보장(니즈)과 인적자본(HLV)이 계산되고, 고른 금액을 &quot;적용&quot;하면 설계의 기준보험금이 바뀝니다.</p>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <Field label="연소득"><ManwonInput value={p.income} onChange={(v) => setP({ income: v })} max={1e5} /></Field>
-          <Field label="유동자산"><ManwonInput value={p.liquidAssets} onChange={(v) => setP({ liquidAssets: v })} max={1e6} /></Field>
-          <Field label="단체보험 보험금"><ManwonInput value={p.groupCover} onChange={(v) => setP({ groupCover: v })} max={1e6} /></Field>
-          <Field label="정기보험 보험금"><ManwonInput value={p.termCover} onChange={(v) => setP({ termCover: v })} max={1e6} /></Field>
+          <Field label="연소득"><MillionInput value={p.income} onChange={(v) => setP({ income: v })} max={1e3} /></Field>
+          <Field label="유동자산"><MillionInput value={p.liquidAssets} onChange={(v) => setP({ liquidAssets: v })} max={1e4} /></Field>
+          <Field label="단체보험 보험금"><MillionInput value={p.groupCover} onChange={(v) => setP({ groupCover: v })} max={1e4} /></Field>
+          <Field label="정기보험 보험금"><MillionInput value={p.termCover} onChange={(v) => setP({ termCover: v })} max={1e4} /></Field>
         </div>
         <p className="mt-1 text-xs text-navy/50">자녀 나이·부채·은퇴시기는 프리셋 카드에서 입력하며 여기 계산에도 쓰입니다.</p>
 

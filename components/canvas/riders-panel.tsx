@@ -1,7 +1,7 @@
 "use client";
 import { useDesign } from "@/components/design-provider";
 import { FormulaHelp } from "@/components/formula-help";
-import { Card, ManwonInput, MillionInput } from "@/components/ui";
+import { Card, MillionInput, ThousandInput } from "@/components/ui";
 import { won } from "@/lib/format";
 import { RIDER_RATE_NOTE, riderPremiums, riderTotal } from "@/lib/riders";
 import { effective, PRODUCT_LABEL } from "@/lib/state";
@@ -23,8 +23,8 @@ export function RidersPanel() {
               <div className="font-medium text-navy">{r.label} <span className="text-xs font-normal text-navy/50">{r.unitLabel}</span></div>
               <div className="mt-1 flex items-center gap-1">
                 {r.kind === "daily"
-                  ? <ManwonInput value={r.amount} onChange={(v) => dispatch({ type: "rider", id: r.id, patch: { amount: v } })} min={1} max={100} />
-                  : <MillionInput value={r.amount} onChange={(v) => dispatch({ type: "rider", id: r.id, patch: { amount: v } })} min={1} max={500} />}
+                  ? <ThousandInput value={r.amount} onChange={(v) => dispatch({ type: "rider", id: r.id, patch: { amount: v } })} min={10} max={1000} ariaLabel={`${r.label} 1일당 금액`} />
+                  : <MillionInput value={r.amount} onChange={(v) => dispatch({ type: "rider", id: r.id, patch: { amount: v } })} min={1} max={500} ariaLabel={`${r.label} 보장금액`} />}
               </div>
               <div className="mt-0.5 text-[10px] text-navy/40" title={RIDER_RATE_NOTE[r.id]}>위험률: {RIDER_RATE_NOTE[r.id]}</div>
             </div>

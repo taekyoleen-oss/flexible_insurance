@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useDesign } from "@/components/design-provider";
-import { Button, Card, Field, ManwonInput, NumInput, Select } from "@/components/ui";
+import { Button, Card, Field, MillionInput, NumInput, Select } from "@/components/ui";
 import { won } from "@/lib/format";
 import { loadLibrary, type LibraryEntry } from "@/lib/library";
 import { fromDesign, fromManual, type ManualOld, type OldContract } from "@/lib/redesign";
@@ -43,12 +43,12 @@ export function OldContractForm({ value, onChange }: { value: OldContract | null
           <>
             <Field label="성별"><Select value={manual.sex} onChange={(e) => setManual({ ...manual, sex: e.target.value as ManualOld["sex"] })}><option value="M">남</option><option value="F">여</option></Select></Field>
             <Field label="가입연령"><NumInput value={manual.entryAge} min={15} max={70} onCommit={(v) => setManual({ ...manual, entryAge: Math.round(v) })} /></Field>
-            <Field label="보험금(평준)"><ManwonInput value={manual.benefit} onChange={(v) => setManual({ ...manual, benefit: v })} min={100} max={1e6} /></Field>
+            <Field label="보험금(평준)"><MillionInput value={manual.benefit} onChange={(v) => setManual({ ...manual, benefit: v })} min={1} max={1e4} /></Field>
             <Field label="납입기간(년)"><NumInput value={manual.payYears} min={1} max={40} onCommit={(v) => setManual({ ...manual, payYears: Math.round(v) })} /></Field>
             <Field label="경과년"><NumInput value={manual.elapsed} min={0} max={60} onCommit={(v) => setManual({ ...manual, elapsed: Math.round(v) })} /></Field>
             <Field label="원계약 예정이율(%)"><NumInput value={Math.round(manual.interest * 1e4) / 100} step={0.05} min={0} max={20} onCommit={(v) => setManual({ ...manual, interest: v / 100 })} /></Field>
-            <Field label="현재 준비금 (0이면 엔진 계산)"><ManwonInput value={manual.reserve ?? 0} onChange={(v) => setManual({ ...manual, reserve: v || undefined })} min={0} max={1e6} /></Field>
-            <Field label="현재 해약환급금 (0이면 엔진 계산)"><ManwonInput value={manual.cash ?? 0} onChange={(v) => setManual({ ...manual, cash: v || undefined })} min={0} max={1e6} /></Field>
+            <Field label="현재 준비금 (0이면 엔진 계산)"><MillionInput value={manual.reserve ?? 0} onChange={(v) => setManual({ ...manual, reserve: v || undefined })} min={0} max={1e4} /></Field>
+            <Field label="현재 해약환급금 (0이면 엔진 계산)"><MillionInput value={manual.cash ?? 0} onChange={(v) => setManual({ ...manual, cash: v || undefined })} min={0} max={1e4} /></Field>
           </>
         )}
       </div>

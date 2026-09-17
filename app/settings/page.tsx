@@ -3,7 +3,7 @@ import { FormulaHelp } from "@/components/formula-help";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useDesign } from "@/components/design-provider";
-import { Button, Card, Field, NumInput, Select } from "@/components/ui";
+import { Button, Card, Field, NumInput, Select, MillionInput } from "@/components/ui";
 import { ASSUMPTIONS, compute, DEFAULT_ENVELOPE, getAssumption, type AssumptionSet, type EnvelopeParams } from "@/lib/engine";
 import { won } from "@/lib/format";
 import { DEFAULT_SETTINGS, TABLE } from "@/lib/state";
@@ -70,8 +70,8 @@ export default function SettingsPage() {
           <Pct label="할인율" value={a.needs.discount} onCommit={(v) => setA({ needs: { ...a.needs, discount: v } })} />
           <Pct label="생활비 비율" value={a.needs.livingRatio} onCommit={(v) => setA({ needs: { ...a.needs, livingRatio: v } })} />
           <Pct label="본인 소비 비율 (HLV)" value={a.needs.selfRatio} onCommit={(v) => setA({ needs: { ...a.needs, selfRatio: v } })} />
-          <Field label="자녀 1인 교육·결혼 (만원)"><NumInput value={a.needs.educationPerChild / 1e4} min={0} onCommit={(v) => setA({ needs: { ...a.needs, educationPerChild: v * 1e4 } })} /></Field>
-          <Field label="정리 자금 (만원)"><NumInput value={a.needs.finalExpense / 1e4} min={0} onCommit={(v) => setA({ needs: { ...a.needs, finalExpense: v * 1e4 } })} /></Field>
+          <Field label="자녀 1인 교육·결혼"><MillionInput value={a.needs.educationPerChild} onChange={(v) => setA({ needs: { ...a.needs, educationPerChild: v } })} max={1e4} /></Field>
+          <Field label="정리 자금"><MillionInput value={a.needs.finalExpense} onChange={(v) => setA({ needs: { ...a.needs, finalExpense: v } })} max={1e4} /></Field>
           <Field label="자녀 독립 연령"><NumInput value={a.needs.independenceAge} min={18} max={35} onCommit={(v) => setA({ needs: { ...a.needs, independenceAge: v } })} /></Field>
         </div>
       </Card>
@@ -83,8 +83,8 @@ export default function SettingsPage() {
           <Field label="증액 종료 연령 (E03)"><NumInput value={env.growthEndAge} min={40} max={100} onCommit={(v) => setEnv({ growthEndAge: v })} /></Field>
           <Field label="최대 배수 (E04)"><NumInput value={env.maxMultiple} step={0.1} min={1} max={10} onCommit={(v) => setEnv({ maxMultiple: v })} /></Field>
           <Pct label="감액 하한 (E05)" value={env.minMultiple} onCommit={(v) => setEnv({ minMultiple: v })} />
-          <Field label="최소 보험금 (만원, E06)"><NumInput value={env.minAmount / 1e4} min={0} onCommit={(v) => setEnv({ minAmount: v * 1e4 })} /></Field>
-          <Field label="심사 한도 (만원, E07)"><NumInput value={env.uwLimit / 1e4} min={0} onCommit={(v) => setEnv({ uwLimit: v * 1e4 })} /></Field>
+          <Field label="최소 보험금 (E06)"><MillionInput value={env.minAmount} onChange={(v) => setEnv({ minAmount: v })} max={1e3} /></Field>
+          <Field label="심사 한도 (E07)"><MillionInput value={env.uwLimit} onChange={(v) => setEnv({ uwLimit: v })} max={1e5} /></Field>
         </div>
         <Button className="mt-3" onClick={() => setEnv(DEFAULT_ENVELOPE)}>제약 기본값</Button>
       </Card>

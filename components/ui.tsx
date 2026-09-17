@@ -52,24 +52,35 @@ export function NumInput({ value, onCommit, ...rest }: Omit<InputHTMLAttributes<
   return <Input {...rest} type="number" value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") commit(); }} />;
 }
 
-/** 만원 단위 입력. value·onChange는 원. min/max/step은 만원. */
-/** 백만원 단위 입력(소수 1자리 = 십만원). value·onChange는 원. min/max는 백만원 */
-export function MillionInput({ value, onChange, min = 0, max = 1e5, step = 1 }: { value: number; onChange: (won: number) => void; min?: number; max?: number; step?: number }) {
+/**
+ * 금액 입력(콤마 표시). unit = 1e3(천원, 정수) | 1e6(백만원, 소수 1자리 = 십만원). value·onChange는 원, min/max는 그 단위.
+ * 타이핑 중에는 입력 문자열을 그대로 두고 blur/Enter에 확정한다.
+ */
+export function AmountInput({ value, onChange, unit, min = 0, max, decimals, ariaLabel }: { value: number; onChange: (won: number) => void; unit: 1e3 | 1e6; min?: number; max: number; decimals?: number; ariaLabel?: string }) {
+  const dp = decimals ?? (unit === 1e6 ? 1 : 0);
+  const fmt = (won: number) => (Math.round((won / unit) * 10 ** dp) / 10 ** dp).toLocaleString("ko-KR", { maximumFractionDigits: dp });
+  const [text, setText] = useState(fmt(value));
+  useEffect(() => setText(fmt(value)), [value]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => {
+    const n = Number(text.replace(/[^0-9.\-]/g, ""));
+    if (text.trim() !== "" && Number.isFinite(n)) {
+      const won = clamp(Math.round(n * 10 ** dp) / 10 ** dp * unit, min * unit, max * unit);
+      if (won !== value) onChange(Math.round(won));
+    }
+    setText(fmt(value));
+  };
   return (
     <div className="flex items-center gap-1">
-      <NumInput value={Math.round(value / 1e5) / 10} min={min} max={max} step={step} inputMode="decimal"
-        onCommit={(n) => onChange(clamp(Math.round(n * 10) * 1e5, min * 1e6, max * 1e6))} />
-      <span className="shrink-0 text-sm text-navy/60">백만원</span>
+      <Input inputMode="decimal" aria-label={ariaLabel} value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") commit(); }} className="text-right" />
+      <span className="shrink-0 text-sm text-navy/60">{unit === 1e6 ? "백만원" : "천원"}</span>
     </div>
   );
 }
-
-export function ManwonInput({ value, onChange, min = 0, max = 1e6, step = 1 }: { value: number; onChange: (won: number) => void; min?: number; max?: number; step?: number }) {
-  return (
-    <div className="flex items-center gap-1">
-      <NumInput value={Math.round(value / 1e4)} min={min} max={max} step={step} inputMode="numeric"
-        onCommit={(n) => onChange(clamp(Math.round(n * 1e4), min * 1e4, max * 1e4))} />
-      <span className="shrink-0 text-sm text-navy/60">만원</span>
-    </div>
-  );
+/** 백만원 단위 입력(보험금·자산 등 큰 금액). value·onChange는 원 */
+export function MillionInput({ value, onChange, min = 0, max = 1e5, ariaLabel }: { value: number; onChange: (won: number) => void; min?: number; max?: number; step?: number; ariaLabel?: string }) {
+  return <AmountInput value={value} onChange={onChange} unit={1e6} min={min} max={max} ariaLabel={ariaLabel} />;
+}
+/** 천원 단위 입력(보험료·일당 등 작은 금액). value·onChange는 원 */
+export function ThousandInput({ value, onChange, min = 0, max = 1e6, ariaLabel }: { value: number; onChange: (won: number) => void; min?: number; max?: number; ariaLabel?: string }) {
+  return <AmountInput value={value} onChange={onChange} unit={1e3} min={min} max={max} ariaLabel={ariaLabel} />;
 }

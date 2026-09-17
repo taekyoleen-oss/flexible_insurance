@@ -1,12 +1,12 @@
 "use client";
 import { FormulaHelp } from "@/components/formula-help";
 import { useDesign } from "@/components/design-provider";
-import { Card, Field, ManwonInput, Select } from "@/components/ui";
+import { Card, Field, MillionInput, Select, ThousandInput } from "@/components/ui";
 import { clamp, won } from "@/lib/format";
 import { effective, s0FromMonthly } from "@/lib/state";
 
 const PAY_YEARS = [5, 10, 15, 20, 30];
-const MONTHLY_MIN = 1, MONTHLY_MAX = 1000; // 만원
+const MONTHLY_MIN = 10, MONTHLY_MAX = 10000; // 천원 (1만원 ~ 1천만원)
 
 export function BudgetFields() {
   const { state, dispatch, result } = useDesign();
@@ -15,13 +15,13 @@ export function BudgetFields() {
   const setMonthly = (m: number) => dispatch({ type: "S0", S0: s0FromMonthly(m, eff.gross100k) });
   return (
     <div className="space-y-3">
-      <Field label={<>월 보험료 <FormulaHelp id="s0FromMonthly" /></>} hint={<>초기 보험금 {won(result.S[0] * state.S0)} · 총 납입 {won(eff.totalPaid)}{eff.isLow && " (저해지)"} · 기준보험금이 1천만원 단위라 월 보험료가 그에 맞춰 조정됩니다</>}>
-        <ManwonInput value={eff.monthly} onChange={setMonthly} min={MONTHLY_MIN} max={MONTHLY_MAX} />
+      <Field label={<>월 보험료 <FormulaHelp id="s0FromMonthly" /></>} hint={<>초기 보험금 {won(result.S[0] * state.S0)} · 총 납입 {won(eff.totalPaid)}{eff.isLow && " (저해지)"} · 기준보험금이 10백만원 단위라 월 보험료가 그에 맞춰 조정됩니다</>}>
+        <ThousandInput value={eff.monthly} onChange={setMonthly} min={MONTHLY_MIN} max={MONTHLY_MAX} ariaLabel="월 보험료" />
       </Field>
-      <input type="range" className="w-full accent-sky" min={MONTHLY_MIN} max={MONTHLY_MAX} step={1} aria-label="월 보험료 슬라이더"
-        value={clamp(Math.round(eff.monthly / 1e4), MONTHLY_MIN, MONTHLY_MAX)} onChange={(e) => setMonthly(Number(e.target.value) * 1e4)} />
-      <Field label={<>기준보험금 <FormulaHelp id="step" /></>} hint={<>배수 1.0의 보험금. 1,000만원 단위 · 그래프 1칸(10%) = {won(state.S0 / 10)}</>}>
-        <ManwonInput value={state.S0} onChange={(v) => dispatch({ type: "S0", S0: v })} min={1000} max={1e6} step={1000} />
+      <input type="range" className="w-full accent-sky" min={MONTHLY_MIN} max={MONTHLY_MAX} step={10} aria-label="월 보험료 슬라이더"
+        value={clamp(Math.round(eff.monthly / 1e3), MONTHLY_MIN, MONTHLY_MAX)} onChange={(e) => setMonthly(Number(e.target.value) * 1e3)} />
+      <Field label={<>기준보험금 <FormulaHelp id="step" /></>} hint={<>배수 1.0의 보험금. 10백만원 단위 · 그래프 1칸(10%) = {won(state.S0 / 10)}</>}>
+        <MillionInput value={state.S0} onChange={(v) => dispatch({ type: "S0", S0: v })} min={10} max={1e4} ariaLabel="기준보험금" />
       </Field>
     </div>
   );

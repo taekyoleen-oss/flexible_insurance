@@ -1,5 +1,5 @@
 "use client";
-import { Card, Field, ManwonInput } from "@/components/ui";
+import { Card, Field, ThousandInput } from "@/components/ui";
 import { won } from "@/lib/format";
 import { budgetFor, type BudgetMode, type OldContract } from "@/lib/redesign";
 
@@ -24,7 +24,7 @@ export function BudgetModePanel({ old, mode, reduced, onChange }: { old: OldCont
         })}
       </div>
       {mode === "reduce" && (
-        <div className="mt-3 max-w-xs"><Field label="낮춘 월 보험료" hint={`원계약 월 ${won(old.monthlyGross)} 이하`}><ManwonInput value={reduced} onChange={(v) => onChange("reduce", v)} min={0} max={Math.floor(old.monthlyGross / 1e4)} /></Field></div>
+        <div className="mt-3 max-w-xs"><Field label="낮춘 월 보험료" hint={`원계약 월 ${won(old.monthlyGross)} 이하`}><ThousandInput value={reduced} onChange={(v) => onChange("reduce", v)} min={0} max={Math.floor(old.monthlyGross / 1e3)} /></Field></div>
       )}
       <p className="mt-2 text-xs text-navy/60">이월 {won(b.carry)} + 월 {won(b.monthlyGross)} × {b.payYears}년 → 새 기준보험금은 3단계 그래프에서 스케줄에 맞춰 자동 역산됩니다. 신계약비는 붙지 않습니다.</p>
     </Card>

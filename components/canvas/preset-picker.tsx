@@ -3,7 +3,7 @@ import { Fragment, useRef, useState, type ReactNode, type RefObject } from "reac
 import { useDesign } from "@/components/design-provider";
 import { FormulaHelp } from "@/components/formula-help";
 import Link from "next/link";
-import { Button, Card, Field, Input, ManwonInput, NumInput, Select, onBackdropClick } from "@/components/ui";
+import { Button, Card, Field, Input, MillionInput, NumInput, Select, ThousandInput, onBackdropClick } from "@/components/ui";
 import { PRESETS, type PresetId } from "@/lib/engine";
 import type { FormulaId } from "@/lib/formulas";
 import { won } from "@/lib/format";
@@ -151,10 +151,10 @@ function useFields() {
   return {
     p, setP, pctInput,
     childrenAges: <Field label={<>자녀 나이 (쉼표)<Common /></>}><Input key={p.childrenAges.join()} defaultValue={p.childrenAges.join(", ")} placeholder="3, 6" onBlur={(e) => { const a = parseAgeList(e.target.value, 0, 40); e.target.value = a.join(", "); setP({ childrenAges: a }); }} onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} /></Field>,
-    income: <Field label={<>연소득<Common /></>}><ManwonInput value={p.income} onChange={(v) => setP({ income: v })} max={1e5} /></Field>,
+    income: <Field label={<>연소득<Common /></>}><MillionInput value={p.income} onChange={(v) => setP({ income: v })} max={1e3} /></Field>,
     spouse: <Field label={<>배우자<Common /></>}><label className="flex h-9 items-center gap-2 text-sm"><input type="checkbox" className="accent-sky" checked={p.hasSpouse} onChange={(e) => setP({ hasSpouse: e.target.checked })} />있음</label></Field>,
     retireAge: <Field label={<>은퇴시기<Common /></>}><Select value={p.retirementAge} onChange={(e) => { setP({ retirementAge: Number(e.target.value) }); dispatch({ type: "applyInfo", applied: { retire: true } }); }}>{RETIRE_OPTIONS.map((v) => <option key={v} value={v}>{v}세</option>)}</Select></Field>,
-    groupCover: <Field label={<>단체보험 보험금<Common /></>}><ManwonInput value={p.groupCover} onChange={(v) => setP({ groupCover: v })} max={1e6} /></Field>,
+    groupCover: <Field label={<>단체보험 보험금<Common /></>}><MillionInput value={p.groupCover} onChange={(v) => setP({ groupCover: v })} max={1e4} /></Field>,
   };
 }
 
@@ -163,7 +163,7 @@ function DebtFields() {
   const f = useFields();
   return (
     <>
-      <Field label={<>부채 잔액<Common /></>}><ManwonInput value={f.p.debt} onChange={(v) => f.setP({ debt: v })} max={1e6} /></Field>
+      <Field label={<>부채 잔액<Common /></>}><MillionInput value={f.p.debt} onChange={(v) => f.setP({ debt: v })} max={1e4} /></Field>
       <Field label={<>만기까지 (년)<Common /></>} hint={`${f.p.age + f.p.debtYears}세 상환 완료`}><NumInput value={f.p.debtYears} min={1} max={40} onCommit={(v) => f.setP({ debtYears: Math.round(v) })} /></Field>
       <Field label="대출 금리 (연)">{f.pctInput(f.p.debtRate, (v) => f.setP({ debtRate: v }))}</Field>
       <Field label="상환방식"><Select value={f.p.debtMethod} onChange={(e) => f.setP({ debtMethod: e.target.value as Profile["debtMethod"] })}><option value="annuity">원리금균등</option><option value="principal">원금균등</option><option value="bullet">만기일시</option></Select></Field>
@@ -176,18 +176,18 @@ function RetireFields() {
     <>
       {f.retireAge}{f.spouse}
       <Field label="배우자 나이"><div className="flex items-center gap-1"><NumInput value={f.p.spouseAge} min={15} max={90} onCommit={(v) => f.setP({ spouseAge: Math.round(v) })} /><span className="text-sm text-navy/60">세</span></div></Field>
-      <Field label="은퇴 후 배우자 월 생활비"><ManwonInput value={f.p.livingMonthly} onChange={(v) => f.setP({ livingMonthly: v })} max={1e4} /></Field>
-      <Field label="은퇴 자산 (연금·퇴직금 현가)"><ManwonInput value={f.p.retireAssets} onChange={(v) => f.setP({ retireAssets: v })} max={1e6} /></Field>
+      <Field label="은퇴 후 배우자 월 생활비"><ThousandInput value={f.p.livingMonthly} onChange={(v) => f.setP({ livingMonthly: v })} max={1e5} /></Field>
+      <Field label="은퇴 자산 (연금·퇴직금 현가)"><MillionInput value={f.p.retireAssets} onChange={(v) => f.setP({ retireAssets: v })} max={1e4} /></Field>
       {f.income}
     </>
   );
 }
-function GroupFields() { const f = useFields(); return <>{f.groupCover}{f.retireAge}{f.income}<Field label={<>유동자산<Common /></>}><ManwonInput value={f.p.liquidAssets} onChange={(v) => f.setP({ liquidAssets: v })} max={1e6} /></Field></>; }
+function GroupFields() { const f = useFields(); return <>{f.groupCover}{f.retireAge}{f.income}<Field label={<>유동자산<Common /></>}><MillionInput value={f.p.liquidAssets} onChange={(v) => f.setP({ liquidAssets: v })} max={1e4} /></Field></>; }
 function EstateFields() {
   const f = useFields();
   return (
     <>
-      <Field label="순자산 (부동산·금융 − 부채)"><ManwonInput value={f.p.netAssets} onChange={(v) => f.setP({ netAssets: v })} max={1e7} /></Field>
+      <Field label="순자산 (부동산·금융 − 부채)"><MillionInput value={f.p.netAssets} onChange={(v) => f.setP({ netAssets: v })} max={1e5} /></Field>
       <Field label="자산 증가율 (연)">{f.pctInput(f.p.assetGrowth, (v) => f.setP({ assetGrowth: v }), 20)}</Field>
       {f.spouse}
       {f.childrenAges}
