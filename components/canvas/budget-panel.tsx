@@ -2,8 +2,8 @@
 import { FormulaHelp } from "@/components/formula-help";
 import { useDesign } from "@/components/design-provider";
 import { Card, Field, MillionInput, Select, ThousandInput } from "@/components/ui";
-import { clamp, won } from "@/lib/format";
-import { effective, s0FromMonthly } from "@/lib/state";
+import { clamp, pct, won } from "@/lib/format";
+import { assumptionOf, effective, lowKind, s0FromMonthly } from "@/lib/state";
 
 const PAY_YEARS = [5, 10, 15, 20, 30];
 const MONTHLY_MIN = 10, MONTHLY_MAX = 10000; // 천원 (1만원 ~ 1천만원)
@@ -29,6 +29,8 @@ export function BudgetFields() {
 
 export function ContractFields() {
   const { state, dispatch } = useDesign();
+  const ls = assumptionOf(state).lowSurrender;
+  const low = { ...ls, kind: lowKind(ls.ratio) };
   return (
     <div className="space-y-3">
       <Field label="납입기간">
@@ -39,7 +41,10 @@ export function ContractFields() {
       {state.profile.product === "cancer"
         ? <p className="text-xs text-navy/60">암보험: 100세 만기 · 암진단 시 보험금 지급, 사망 시 책임준비금 지급 · 90일 면책(첫해 급부 3/4)</p>
         : <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-sky" checked={state.waiver} onChange={(e) => dispatch({ type: "waiver", on: e.target.checked })} />납입면제 (사망·장해 50% 이중탈퇴)</label>}
-      <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-sky" checked={state.lowSurrender} onChange={(e) => dispatch({ type: "lowSurrender", on: e.target.checked })} />저해지 (납입기간 중 해약환급금 30% · 보험료 20% 인하)</label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-sky" checked={state.lowSurrender} onChange={(e) => dispatch({ type: "lowSurrender", on: e.target.checked })} />{low.kind} (납입기간 중 해약환급금 {Math.round(low.ratio * 100)}% · 적용해지율 {pct(low.lapseRate)})</label>
+      {state.lowSurrender && <p className="text-xs text-navy/60">{low.ratio === 0
+        ? "납입기간 중에 해지하면 해약환급금이 없습니다. 그만큼 책임준비금을 덜 쌓아도 되므로 보험료가 내려갑니다."
+        : `납입기간 중 해지자에게 표준형 해약환급금의 ${Math.round(low.ratio * 100)}%만 지급하므로, 남는 ${100 - Math.round(low.ratio * 100)}%만큼 책임준비금을 덜 쌓아도 되어 보험료가 내려갑니다.`} 납입 완료 후 준비금·환급금은 표준형과 같습니다.</p>}
     </div>
   );
 }

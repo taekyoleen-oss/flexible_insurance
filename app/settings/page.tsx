@@ -43,8 +43,8 @@ export default function SettingsPage() {
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <Pct label={<>예정이율 <FormulaHelp id="commutation" /></>} value={a.interest} onCommit={(v) => setA({ interest: v })} />
           <Pct label="표준이율 (표준 준비금)" value={a.standardInterest} onCommit={(v) => setA({ standardInterest: v })} />
-          <Pct label={<>저해지 환급금 비율 (납입기간 중) <FormulaHelp id="lowSurrender" /></>} value={a.lowSurrender.ratio} onCommit={(v) => setA({ lowSurrender: { ...a.lowSurrender, ratio: v } })} />
-          <Pct label="저해지 보험료 인하율" value={a.lowSurrender.premiumDiscount} onCommit={(v) => setA({ lowSurrender: { ...a.lowSurrender, premiumDiscount: v } })} />
+          <Pct label={<>저해지 환급금 비율 (납입기간 중, 0 = 무해지) <FormulaHelp id="lowSurrender" /></>} value={a.lowSurrender.ratio} onCommit={(v) => setA({ lowSurrender: { ...a.lowSurrender, ratio: v } })} />
+          <Pct label={<>적용해지율 w (납입기간 중, 납입 후 0) <FormulaHelp id="lowSurrender" /></>} value={a.lowSurrender.lapseRate} onCommit={(v) => setA({ lowSurrender: { ...a.lowSurrender, lapseRate: v } })} />
         </div>
         <h3 className="mt-4 text-sm font-medium text-navy">사업비 ({a.expenses.model === "method" ? "산출방법서형" : "3이원 단순형"})</h3>
         <div className="mt-2 grid gap-3 sm:grid-cols-3">

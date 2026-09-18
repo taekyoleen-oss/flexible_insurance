@@ -9,7 +9,7 @@ import { assumptionOf, BENEFIT_LABEL, celebrations, deathSegments, effective, PR
  * 입력·가정 시트의 값과 위험률(q·f), 설계 배수만 상수이고, 계산기수·보험료·준비금·환급금·특약은 모두 수식이다.
  * 수식 셀에는 엔진이 계산한 값을 캐시로 함께 넣어(Excel은 열 때 다시 계산) 검산 값과 나란히 볼 수 있다.
  */
-export const SHEETS = ["입력·가정", "위험률·계산기수", "표준기초 계산기수", "보험료 산출", "준비금·환급금", "설계 스케줄"] as const;
+export const SHEETS = ["입력·가정", "위험률·계산기수", "표준기초 계산기수", "보험료 산출", "준비금·환급금", "설계 스케줄", "저해지 계산기수", "저해지 계산기수(표준)"] as const;
 
 type Cell = string | number | boolean | null | { t: "n"; f: string; v?: number };
 type Row = Cell[];
@@ -39,8 +39,8 @@ function paramSheet(s: DesignState, r: EngineResult) {
   add("units", "단위 수 (S0 ÷ 100,000)", fc(`${ref.S0}/100000`, r.units), "10만원당 보험료에 곱한다");
   add("waiver", "납입면제 (1 = 적용)", s.waiver ? 1 : 0, "적용 시 계산기수의 f 열에 납입면제 발생률");
   add("low", "저해지 (1 = 적용)", s.lowSurrender ? 1 : 0);
-  add("lowRatio", "저해지 환급 비율", a.lowSurrender.ratio, "납입기간 중 해약환급금 = 표준 × 비율");
-  add("lowDisc", "저해지 보험료 인하율", a.lowSurrender.premiumDiscount);
+  add("lowRatio", "저해지 환급 비율 w^r", a.lowSurrender.ratio, "납입기간 중 해약환급금 = 표준형 × 비율 (0 = 무해지)");
+  add("lapse", "적용해지율 w", a.lowSurrender.lapseRate, "저해지·무해지형 전용. 납입기간 중에만 적용, 납입 완료 후 0");
   add("wait", "면책계수 (첫해 급부 배율)", a.waitFactor ?? 1, p.product === "cancer" ? "암 90일 면책" : "");
   add("interest", "예정이율 i", a.interest, `가정 세트 ${a.id} (${a.version})`);
   add("interestStd", "표준이율", a.standardInterest, "표준책임준비금·해약공제 기준");
@@ -70,29 +70,35 @@ function paramSheet(s: DesignState, r: EngineResult) {
 }
 
 /**
- * 계산기수 시트(원본 `기수표`): t, 연령, q, f 는 값, lx·l′x·Dx·D′x·Cx·Nx·N′x 는 수식.
- * lx_{t+1} = lx_t(1−q), l′x_{t+1} = l′x_t(1−q−f+q·f/2), Dx = lx·v^t, Cx = lx·q·v^{t+½}, Nx = Σ_{u≥t} Dx
+ * 계산기수 시트(원본 `기수표` + 저해지 산출방법서의 적용해지율 w).
+ * lx_{t+1} = lx_t(1−q−w+q·w/2), l′x_{t+1} = l′x_t(1−q−f−w+(qf+qw+fw)/2)
+ * Dx = lx·v^t, Cx = lx·q·(1−w/2)·v^{t+½}, Wx = lx·w·v^{t+½}, Nx = Σ_{u≥t} Dx
+ * 표준형(해지율 미적용)이면 E열 w = 0 이라 종전 식과 같아진다.
+ * 열: A t · B 연령 · C q · D f · E w · F lx · G l'x · H Dx · I D'x · J Cx · K Wx · L Nx · M N'x
  */
-function commutationSheet(age: number, n: number, interest: number, qv: number[], fv: number[], vRef: string) {
-  const k = commutation({ interest, q: qv, f: fv }, age, n);
-  const header = ["t", "연령", "q", "f", "lx", "l'x", "Dx", "D'x", "Cx", "Nx", "N'x"];
+function commutationSheet(age: number, n: number, interest: number, qv: number[], fv: number[], vRef: string, lapse?: { rate: number; years: number }) {
+  const k = commutation({ interest, q: qv, f: fv, lapse }, age, n);
+  const header = ["t", "연령", "q", "f", "w (해지율)", "lx", "l'x", "Dx", "D'x", "Cx", "Wx (해지)", "Nx", "N'x"];
   const rows: Row[] = [header];
   const last = n + 2;   // 마지막 데이터 행 번호(t = n)
   for (let t = 0; t <= n; t++) {
     const row = t + 2, prev = row - 1;
     rows.push([
       t, age + t, qv[age + t] ?? 0, fv[age + t] ?? 0,
-      t === 0 ? 100000 : fc(`E${prev}*(1-C${prev})`, k.lx[t]),
-      t === 0 ? 100000 : fc(`F${prev}*(1-C${prev}-D${prev}+C${prev}*D${prev}/2)`, k.lxp[t]),
-      fc(`E${row}*${vRef}^A${row}`, k.Dx[t]),
-      fc(`F${row}*${vRef}^A${row}`, k.Dpx[t]),
-      fc(`E${row}*C${row}*${vRef}^(A${row}+0.5)`, k.Cx[t]),
-      fc(`SUM(G${row}:G${last})`, k.Nx[t]),
-      fc(`SUM(H${row}:H${last})`, k.Npx[t]),
+      lapse && t < lapse.years ? lapse.rate : 0,
+      t === 0 ? 100000 : fc(`F${prev}*(1-C${prev}-E${prev}+C${prev}*E${prev}/2)`, k.lx[t]),
+      t === 0 ? 100000 : fc(`G${prev}*(1-C${prev}-D${prev}-E${prev}+(C${prev}*D${prev}+C${prev}*E${prev}+D${prev}*E${prev})/2)`, k.lxp[t]),
+      fc(`F${row}*${vRef}^A${row}`, k.Dx[t]),
+      fc(`G${row}*${vRef}^A${row}`, k.Dpx[t]),
+      fc(`F${row}*C${row}*(1-E${row}/2)*${vRef}^(A${row}+0.5)`, k.Cx[t]),
+      fc(`F${row}*E${row}*${vRef}^(A${row}+0.5)`, k.Wx[t]),
+      fc(`SUM(H${row}:H${last})`, k.Nx[t]),
+      fc(`SUM(I${row}:I${last})`, k.Npx[t]),
     ]);
   }
-  return { ws: sheet(rows, header.map(() => 14)), k };
+  return { rows, header, k };
 }
+const commutationWs = (c: { rows: Row[]; header: string[] }) => sheet(c.rows, c.header.map(() => 14));
 
 export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
   const a = assumptionOf(s), p = s.profile, rs = tableOf(p)[p.sex], e = a.expenses;
@@ -106,11 +112,11 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
   XLSX.utils.book_append_sheet(wb, wsIn, SHEETS[0]);
 
   // 2·3. 계산기수(적용·표준)
-  const K = q(SHEETS[1]), KS = q(SHEETS[2]), SCH = q(SHEETS[5]), PR = q(SHEETS[3]);
+  const K = q(SHEETS[1]), KS = q(SHEETS[2]), SCH = q(SHEETS[5]), PR = q(SHEETS[3]), RES = q(SHEETS[4]), LO = q(SHEETS[6]), LOS = q(SHEETS[7]);
   const k1 = commutationSheet(p.age, n, a.interest, rs.q, s.waiver ? rs.f : zero, ref.v);
-  XLSX.utils.book_append_sheet(wb, k1.ws, SHEETS[1]);
+  XLSX.utils.book_append_sheet(wb, commutationWs(k1), SHEETS[1]);
   const k2 = commutationSheet(p.age, n, a.standardInterest, rs.qStd, s.waiver ? rs.fStd : zero, ref.vStd);
-  XLSX.utils.book_append_sheet(wb, k2.ws, SHEETS[2]);
+  XLSX.utils.book_append_sheet(wb, commutationWs(k2), SHEETS[2]);
 
   // 행 번호: 계산기수·스케줄 시트는 2행부터 t=0
   const first = 2, lastS = first + n - 1, lastC = first + n, mRow = first + m, n20Row = first + Math.min(n, 20), nRow = first + n;
@@ -122,9 +128,9 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
   const pApp = premium(k1.k, cWait, eS), pStd = premium(k2.k, cWait, eS);
   const V = reserves(k1.k, cWait, eS, pApp), Vs = reserves(k2.k, cWait, eS, pStd);
   const stdPvb = pStd.pvb, stdBase = pStd.base, stdN = pStd.nStar, stdPBeta = pStd.pBeta;
-  const pvbF = (KK: string) => `SUMPRODUCT(${SCH}!E${first}:E${lastS},${KK}!I${first}:I${lastS})+SUMPRODUCT(${SCH}!D${first}:D${lastC},${KK}!G${first}:G${lastC})`;
-  const nStarF = (KK: string) => `${ref.mm}*((${KK}!K${first}-${KK}!K${mRow})-(${ref.mm}-1)/(2*${ref.mm})*(${KK}!H${first}-${KK}!H${mRow}))`;
-  const baseF = (KK: string) => `B2/(${KK}!K${first}-${KK}!K${n20Row})`;
+  const pvbF = (KK: string) => `SUMPRODUCT(${SCH}!E${first}:E${lastS},${KK}!J${first}:J${lastS})+SUMPRODUCT(${SCH}!D${first}:D${lastC},${KK}!H${first}:H${lastC})`;
+  const nStarF = (KK: string) => `${ref.mm}*((${KK}!M${first}-${KK}!M${mRow})-(${ref.mm}-1)/(2*${ref.mm})*(${KK}!I${first}-${KK}!I${mRow}))`;
+  const baseF = (KK: string) => `B2/(${KK}!M${first}-${KK}!M${n20Row})`;
   const pu = r.perUnit;
   const rows: Row[] = [["항목", "Excel 수식 (검산)", "엔진 값", "설명"]];
   const put = (label: string, f: string, v: number, note = "") => rows.push([label, fc(f, v), v, note]);
@@ -135,30 +141,30 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
   put("기준연납순보험료", baseF(K), pu.base, "PVB / (N′0 − N′min(n,20))");                                             // B5
   if (e.model === "method") {
     put("신계약비 α (1단위)", `${ref.alphaS}+${ref.alphaP}*ROUND(B5,5)`, pu.alpha, "α_S + α_P·round5(기준연납)");        // B6
-    put("부가 α (1회 납입)", `(${ref.alphaS}+${ref.alphaP}*B5)*${K}!H${first}/B3`, pu.loading.alpha, "(α_S + α_P·기준연납)·D′0 / N*");   // B7
+    put("부가 α (1회 납입)", `(${ref.alphaS}+${ref.alphaP}*B5)*${K}!I${first}/B3`, pu.loading.alpha, "(α_S + α_P·기준연납)·D′0 / N*");   // B7
     put("부가 β_S", `${ref.betaS}/${ref.mm}`, pu.loading.betaS, "β_S / mm");                                            // B8
-    put("부가 β′", `${ref.betaPrime}*(${K}!J${mRow}-${K}!J${nRow})/B3`, pu.loading.betaPrime, "β′(N_m − N_n) / N*");      // B9
+    put("부가 β′", `${ref.betaPrime}*(${K}!L${mRow}-${K}!L${nRow})/B3`, pu.loading.betaPrime, "β′(N_m − N_n) / N*");      // B9
     put("영업보험료 G (1단위·월)", `(B4+B7+B8+B9)/(1-${ref.betaG}-${ref.gamma})`, pu.gross, "(P + α + β_S + β′) / (1 − β_G − γ)");   // B10
-    put("β′ 포함 연납순보험료 P_β", `(B2+${ref.betaPrime}*(${K}!J${mRow}-${K}!J${nRow}))/(${K}!K${first}-${K}!K${mRow})`, pu.pBeta, "준비금용");   // B11
+    put("β′ 포함 연납순보험료 P_β", `(B2+${ref.betaPrime}*(${K}!L${mRow}-${K}!L${nRow}))/(${K}!M${first}-${K}!M${mRow})`, pu.pBeta, "준비금용");   // B11
   } else {
     put("신계약비 α (1단위)", `${ref.alpha}`, pu.alpha, "3이원 α");
-    put("부가 α (1회 납입)", `${ref.alpha}*${K}!H${first}/B3`, pu.loading.alpha, "α·D′0 / N*");
-    put("부가 β", `${ref.beta}*(${K}!J${first}-${K}!J${nRow})/B3`, pu.loading.betaS, "β(N_0 − N_n) / N*");
+    put("부가 α (1회 납입)", `${ref.alpha}*${K}!I${first}/B3`, pu.loading.alpha, "α·D′0 / N*");
+    put("부가 β", `${ref.beta}*(${K}!L${first}-${K}!L${nRow})/B3`, pu.loading.betaS, "β(N_0 − N_n) / N*");
     put("(사용 안 함)", "0", 0);
     put("영업보험료 G (1단위·월)", `(B4+B7+B8)/(1-${ref.gamma})`, pu.gross, "(P + α + β) / (1 − γ)");
-    put("연납순보험료 P_β", `B2/(${K}!K${first}-${K}!K${mRow})`, pu.pBeta, "준비금용");
+    put("연납순보험료 P_β", `B2/(${K}!M${first}-${K}!M${mRow})`, pu.pBeta, "준비금용");
   }
   rows.push([]);                                                                                                        // 12
   rows.push(["표준기초 (표준이율·표준위험률)", "", "", "해약공제·표준준비금용"]);                                          // 13
   put("PVB (표준)", pvbF(KS), stdPvb);                                                                                   // B14
   put("N* (표준)", nStarF(KS), stdN);                                                                                    // B15
-  put("기준연납순보험료 (표준)", `B14/(${KS}!K${first}-${KS}!K${n20Row})`, stdBase);                                       // B16
+  put("기준연납순보험료 (표준)", `B14/(${KS}!M${first}-${KS}!M${n20Row})`, stdBase);                                       // B16
   if (e.model === "method") {
     put("신계약비 α (표준)", `${ref.alphaS}+${ref.alphaP}*ROUND(B16,5)`, pu.alphaStd);                                     // B17
-    put("P_β (표준)", `(B14+${ref.betaPrime}*(${KS}!J${mRow}-${KS}!J${nRow}))/(${KS}!K${first}-${KS}!K${mRow})`, stdPBeta);   // B18
+    put("P_β (표준)", `(B14+${ref.betaPrime}*(${KS}!L${mRow}-${KS}!L${nRow}))/(${KS}!M${first}-${KS}!M${mRow})`, stdPBeta);   // B18
   } else {
     put("신계약비 α (표준)", `${ref.alpha}`, pu.alphaStd);
-    put("P_β (표준)", `B14/(${KS}!K${first}-${KS}!K${mRow})`, stdPBeta);
+    put("P_β (표준)", `B14/(${KS}!M${first}-${KS}!M${mRow})`, stdPBeta);
   }
   rows.push([]);                                                                                                        // 19
   rows.push(["10만원당 (원, 반올림)", "", "", "엔진과 같이 ROUND(×100,000)"]);                                             // 20
@@ -168,10 +174,10 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
   put("신계약비 산출", "ROUND(B6*100000,0)", r.per100k.alpha);                                                            // B24
   put("신계약비 표준", "ROUND(B17*100000,0)", r.per100k.alphaStd);                                                        // B25
   put("해약공제 기준 신계약비", "MIN(B24,B25)", r.per100k.newBiz, "min(산출, 표준)");                                       // B26
-  put("저해지 영업보험료 (10만원당)", `IF(${ref.low}=1,ROUND(B23*(1-${ref.lowDisc}),0),B23)`, eff.gross100k, "저해지면 (1 − 인하율)");   // B27
+  put("저해지·무해지 영업보험료 (10만원당)", s.lowSurrender ? `${LO}!S13` : "B23", eff.gross100k, s.lowSurrender ? `'${SHEETS[6]}' 시트에서 해지율 w를 넣어 다시 산출한 값` : "저해지 미적용");   // B27
   rows.push([]);                                                                                                        // 28
   rows.push(["가입금액 기준 (원)", "", "", "10만원당 × 단위 수"]);                                                          // 29
-  put("월 순보험료", `B21*${ref.units}`, r.monthly.net);                                                                  // B30
+  put("월 순보험료 (고객 기준)", s.lowSurrender ? `${LO}!S12*${ref.units}` : `B21*${ref.units}`, eff.net);                   // B30
   put("월 영업보험료 (표준형)", `B23*${ref.units}`, r.monthly.gross);                                                       // B31
   put("월 영업보험료 (고객 납입)", `B27*${ref.units}`, eff.monthly);                                                       // B32
   put("총 납입보험료", `B32*${ref.mm}*${ref.m}`, eff.totalPaid);                                                          // B33
@@ -186,32 +192,39 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
 
   // 5. 준비금·환급금 — 원본 V·W 시트. 행마다 수식
   const rr = reserveRows(s, r);
-  const hdr = ["경과년 t", "연령", BENEFIT_LABEL[p.product], "축하금", "V_t (1단위, 적용)", "V_t (1단위, 표준)", "적용준비금(10만원당)", "표준준비금(10만원당)", "적용준비금(원)", "표준준비금(원)", "해약공제(원)", "해약환급금(표준형)", "해약환급금(고객)", "납입누계", "환급률", "사업비(연)", "엔진 적용준비금(10만)", "엔진 해약환급금(고객)"];
+  // E~J 는 항상 표준형(해지율 미적용) 기준 — 해약공제·해약환급금의 출발점이라서 저해지여도 그대로 둔다
+  const hdr = ["경과년 t", "연령", BENEFIT_LABEL[p.product], "축하금", "V_t (1단위, 표준형·적용)", "V_t (1단위, 표준형·표준)", "표준형 적용준비금(10만원당)", "표준형 표준준비금(10만원당)", "표준형 적용준비금(원)", "표준형 표준준비금(원)", "해약공제(원)", "해약환급금(표준형)", "해약환급금(고객)", "납입누계", "환급률", "사업비(연)", "계약 적용준비금(원)", "계약 표준준비금(원)", "엔진 적용준비금(10만)", "엔진 해약환급금(고객)"];
   const resRows: Row[] = [hdr];
   const bpRef = e.model === "method" ? ref.betaPrime : "0";
   const k7 = Math.min(m, 7);
+  const Vf = (KK: string, pbeta: string, t: number, csvRef = "") => {
+    const tRow = first + t;
+    {
+      const death = t < n ? `SUMPRODUCT(${SCH}!E${tRow}:E${lastS},${KK}!J${tRow}:J${lastS})` : "0";
+      const surv = t + 1 <= n ? `SUMPRODUCT(${SCH}!D${tRow + 1}:D${lastC},${KK}!H${tRow + 1}:H${lastC})` : "0";
+      const maint = `${bpRef}*(INDEX(${KK}!L:L,MAX(${tRow},${mRow}))-${KK}!L${nRow})`;
+      const income = t <= m ? `${pbeta}*(${KK}!M${tRow}-${KK}!M${mRow})` : "0";
+      return `IF(${KK}!H${tRow}<=0,0,(${death}+${surv}+${maint}-${income}${csvRef ? `+${csvRef}` : ""})/${KK}!H${tRow})`;
+    }
+  };
   for (let t = 0; t <= n; t++) {
     const row = t + 2, tRow = first + t;
-    const Vf = (KK: string, pbeta: string) => {
-      const death = t < n ? `SUMPRODUCT(${SCH}!E${tRow}:E${lastS},${KK}!I${tRow}:I${lastS})` : "0";
-      const surv = t + 1 <= n ? `SUMPRODUCT(${SCH}!D${tRow + 1}:D${lastC},${KK}!G${tRow + 1}:G${lastC})` : "0";
-      const maint = `${bpRef}*(INDEX(${KK}!J:J,MAX(${tRow},${mRow}))-${KK}!J${nRow})`;
-      const income = t <= m ? `${pbeta}*(${KK}!K${tRow}-${KK}!K${mRow})` : "0";
-      return `IF(${KK}!G${tRow}<=0,0,(${death}+${surv}+${maint}-${income})/${KK}!G${tRow})`;
-    };
     resRows.push([
       t, p.age + t,
       fc(`${SCH}!F${Math.min(tRow, lastS)}`, rr[t].benefit), fc(`${SCH}!G${tRow}`, rr[t].celebration),
-      fc(Vf(K, `${PR}!B11`), V[t]), fc(Vf(KS, `${PR}!B18`), Vs[t]),
+      fc(Vf(K, `${PR}!B11`, t), V[t]), fc(Vf(KS, `${PR}!B18`, t), Vs[t]),
       fc(`ROUND(E${row}*100000,0)`, r.reserve100k[t]), fc(`ROUND(F${row}*100000,0)`, r.reserveStd100k[t]),
-      fc(`G${row}*${ref.units}`, rr[t].reserve), fc(`H${row}*${ref.units}`, rr[t].reserveStd),
+      fc(`G${row}*${ref.units}`, r.reserve100k[t] * r.units), fc(`H${row}*${ref.units}`, r.reserveStd100k[t] * r.units),
       fc(`${PR}!B26*${ref.units}*MAX(${k7}-A${row},0)/${k7}`, r.surrender.deduction[t]),
       fc(`ROUND(MAX(I${row}-K${row},0),0)`, r.surrender.cash[t]),
       fc(`IF(AND(${ref.low}=1,A${row}<${ref.m}),ROUND(L${row}*${ref.lowRatio},0),L${row})`, eff.cash[t]),
       fc(`MIN(A${row},${ref.m})*${ref.mm}*${PR}!B32`, eff.paid[t]),
       fc(`IF(N${row}>0,M${row}/N${row},0)`, eff.rate[t]),
       t < n ? fc(t < m ? `${ref.mm}*(${PR}!B37+${PR}!B39+${PR}!B40)${t === 0 ? `+${PR}!B6*${ref.S0}` : ""}` : `${bpRef}*${ref.S0}`, r.expenseFlow[t]) : null,
-      r.reserve100k[t], eff.cash[t],
+      // 저해지·무해지면 해지율을 넣은 준비금(저해지 시트 P열), 아니면 표준형 그대로
+      fc(s.lowSurrender ? `ROUND(${LO}!P${row}*100000,0)*${ref.units}` : `I${row}`, rr[t].reserve),
+      fc(s.lowSurrender ? `ROUND(${LOS}!P${row}*100000,0)*${ref.units}` : `J${row}`, rr[t].reserveStd),
+      eff.reserve100k[t], eff.cash[t],
     ]);
   }
   XLSX.utils.book_append_sheet(wb, sheet(resRows, hdr.map(() => 16)), SHEETS[4]);
@@ -225,6 +238,52 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
       t < n ? fc(`C${row}*${ref.S0}`, r.S[t] * s.S0) : null, fc(`D${row}*${ref.S0}`, (r.C[t] ?? 0) * s.S0)]);
   }
   XLSX.utils.book_append_sheet(wb, sheet(schRows, [6, 8, 14, 16, 22, 18, 14]), SHEETS[5]);
+
+  // 6-2. 저해지·무해지 산출 — 적용해지율 w를 넣은 계산기수에 해지급부 현가 CSV 를 더해 다시 산출한다
+  //  Ā_x = M̄_x + CSV_x,  CSV_t = Σ_{u≥t} Wx_u·w^r·(표준형 해약환급금_u + _{u+1})/2   (산출방법서 §2.1 ④)
+  if (s.lowSurrender) {
+    const { ratio, lapseRate } = a.lowSurrender;
+    const lapse = { rate: lapseRate, years: m };
+    const lowTab = (self: string, interest: number, qv: number[], fv: number[], vRef: string) => {
+      const c = commutationSheet(p.age, n, interest, qv, fv, vRef, lapse);
+      const wT3 = r.surrender.cash.map((x) => x / s.S0);                              // 표준형 해약환급금, 1단위당
+      const payout = wT3.map((_, t) => (t < m ? (ratio * (wT3[t] + (wT3[t + 1] ?? wT3[t]))) / 2 : 0));
+      const csv = new Array<number>(n + 2).fill(0);
+      for (let t = n; t >= 0; t--) csv[t] = csv[t + 1] + c.k.Wx[t] * payout[t];
+      const pLow = premium(c.k, cWait, eS, csv[0]);
+      const VLow = reserves(c.k, cWait, eS, pLow, csv);
+      const meth = e.model === "method";
+      const sum: [string, string, number, string][] = [
+        ["해지급부 현가 CSV_0", "O2", csv[0], "Σ Wx_t · 해지급부_t"],
+        ["급부 현가 Ā_x = M̄_x + CSV_0", `${pvbF(self)}+S2`, pLow.pvb, "사망·생존 급부 + 해지급부"],
+        ["월납 보정 납입기수 N*", nStarF(self), pLow.nStar, "해지 탈퇴가 반영된 N′·D′"],
+        ["순보험료 P", "S3/S4", pLow.net, "Ā_x / N*"],
+        ["기준연납순보험료", `S3/(M${first}-M${n20Row})`, pLow.base, ""],
+        ["부가 α (1회 납입)", meth ? `(${ref.alphaS}+${ref.alphaP}*S6)*I${first}/S4` : `${ref.alpha}*I${first}/S4`, pLow.loading.alpha, ""],
+        ["부가 β_S", meth ? `${ref.betaS}/${ref.mm}` : `${ref.beta}*(L${first}-L${nRow})/S4`, pLow.loading.betaS, ""],
+        ["부가 β′", meth ? `${ref.betaPrime}*(L${mRow}-L${nRow})/S4` : "0", pLow.loading.betaPrime, ""],
+        ["영업보험료 G", meth ? `(S5+S7+S8+S9)/(1-${ref.betaG}-${ref.gamma})` : `(S5+S7+S8)/(1-${ref.gamma})`, pLow.gross, ""],
+        ["β′ 포함 연납순보험료 P_β", meth ? `(S3+${ref.betaPrime}*(L${mRow}-L${nRow}))/(M${first}-M${mRow})` : `S3/(M${first}-M${mRow})`, pLow.pBeta, "P열 준비금에 쓰인다"],
+        ["순보험료 (10만원당)", "ROUND(S5*100000,0)", Math.round(pLow.net * 1e5), ""],
+        ["영업보험료 (10만원당)", "ROUND(S10*100000,0)", Math.round(pLow.gross * 1e5), ""],
+        ["표준형 대비 인하율", `IF(${PR}!B23>0,(${PR}!B23-S13)/${PR}!B23,0)`, r.per100k.gross > 0 ? (r.per100k.gross - Math.round(pLow.gross * 1e5)) / r.per100k.gross : 0, "결과값 — 입력이 아니다"],
+      ];
+      c.rows[0].push("해지급부(1단위)", "CSV_t", "V_t (1단위)", "", "항목", "Excel 수식 (검산)", "설명");
+      for (let t = 0; t <= n; t++) {
+        const row = t + 2, line = c.rows[t + 1];
+        line.push(
+          fc(t < m ? `${ref.lowRatio}*(${RES}!L${row}+${RES}!L${row + 1})/2/${ref.S0}` : "0", payout[t]),
+          fc(`SUMPRODUCT(K${row}:K${lastC},N${row}:N${lastC})`, csv[t]),
+          fc(Vf(self, `${self}!S11`, t, `O${row}`), VLow[t]),
+        );
+        const q4 = sum[t];
+        if (q4) line.push("", q4[0], fc(q4[1], q4[2]), q4[3]);
+      }
+      return sheet(c.rows, [...c.header.map(() => 14), 16, 16, 16, 3, 30, 26, 40]);
+    };
+    XLSX.utils.book_append_sheet(wb, lowTab(LO, a.interest, rs.q, s.waiver ? rs.f : zero, ref.v), SHEETS[6]);
+    XLSX.utils.book_append_sheet(wb, lowTab(LOS, a.standardInterest, rs.qStd, s.waiver ? rs.fStd : zero, ref.vStd), SHEETS[7]);
+  }
 
   // 7. 특약(부가된 것만): 특약별 계산기수·보험료 수식
   for (const rd of riderPremiums(s).filter((x) => x.on)) {

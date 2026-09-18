@@ -22,8 +22,8 @@ export default function Home() {
         <h2 className="mb-3 font-display text-xl text-navy">상품을 고르고 새 설계를 시작합니다</h2>
         <div className="grid gap-4 md:grid-cols-2">
           {([
-            ["whole", "종신보험", "사망보험금을 연령별로 설계합니다. 종신 보장, 제7회 경험생명표·납입면제 이중탈퇴, 저해지 선택.", "기준 사망보험금 1억"],
-            ["cancer", "암보험", "암진단보험금을 연령별로 설계합니다. 100세 만기, 암발생률 기준 산출, 사망 시에는 책임준비금을 지급합니다(90일 면책은 첫해 급부 3/4로 반영).", "기준 암진단보험금 1억"],
+            ["whole", "종신보험", "사망보험금을 연령별로 설계합니다. 종신 보장, 제7회 경험생명표·납입면제 이중탈퇴, 저해지환급형(납입기간 중 환급금 70%·해지율 3%) 선택.", "기준 사망보험금 1억"],
+            ["cancer", "암보험", "암진단보험금을 연령별로 설계합니다. 100세 만기, 암발생률 기준 산출, 사망 시에는 책임준비금을 지급합니다(90일 면책은 첫해 급부 3/4로 반영). 무해지환급형(납입기간 중 환급금 없음·해지율 3%) 선택.", "기준 암진단보험금 1억"],
           ] as const).map(([id, name, desc, base]) => (
             <Card key={id} className="flex flex-col" title={<span className="flex items-center justify-between gap-2">{name}<span className="rounded bg-navy/5 px-2 py-0.5 font-sans text-xs font-normal text-navy/70">{base}</span></span>}>
               <p className="text-sm text-navy/70">{desc}</p>

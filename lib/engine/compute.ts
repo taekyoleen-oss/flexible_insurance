@@ -1,4 +1,4 @@
-import { commutation } from "./commutation";
+import { commutation, type Commutation } from "./commutation";
 import { expandBlocks } from "./schedule";
 import { premium, type Loading, type PremiumResult } from "./premium";
 import { reserves } from "./reserve";
@@ -16,8 +16,19 @@ export interface EngineResult {
   reserve100k: number[]; reserveStd100k: number[];
   surrender: SurrenderResult;
   expenseFlow: number[];                     // 연도별 사업비(원), t=0..n-1
-  /** 저해지: 납입기간 중 해약환급금 = 표준 × ratio, 영업보험료 = 표준 × (1 − premiumDiscount). deltaP100k = 10만원당 인하액 */
-  lowSurrender?: { ratio: number; premiumDiscount: number; deltaP100k: number; gross100k: number; monthlyGross: number; cash: number[]; rate: number[]; paid: number[] };
+  /**
+   * 저해지·무해지형(산출방법서 §2.1·§4). 적용해지율 w를 넣은 계산기수로 다시 산출한 결과.
+   * 납입기간 중 해지환급금 = 표준형 × ratio(무해지면 0), 그 차액이 급부 현가를 낮춰 보험료가 내려간다.
+   * premiumDiscount는 입력이 아니라 결과(표준형 대비 인하율)다.
+   */
+  lowSurrender?: {
+    ratio: number; lapseRate: number;
+    premiumDiscount: number; deltaP100k: number;
+    net100k: number; gross100k: number; monthlyGross: number;
+    pvCsv: number;                              // 해지급부 현가 CSV_0 (radix 10만)
+    reserve100k: number[]; reserveStd100k: number[];   // 저해지형 자체 책임준비금
+    cash: number[]; rate: number[]; paid: number[];
+  };
   meta: { assumptionId: string; assumptionVersion: string; waiver: boolean; lowSurrender: boolean };
 }
 
@@ -74,13 +85,38 @@ export function compute(input: EngineInput, a: AssumptionSet, table: RateTable):
     meta: { assumptionId: a.id, assumptionVersion: a.version, waiver, lowSurrender: useLow },
   };
   if (useLow) {
-    // 단순 규칙(계획서 §0.6 #23): 납입기간 중 환급금은 표준의 ratio, 보험료는 표준의 (1 − premiumDiscount). 납입 완료 후는 표준과 같다.
-    const { ratio, premiumDiscount } = a.lowSurrender;
-    const gross100k = Math.round(per100k.gross * (1 - premiumDiscount));
-    const cash = sur.cash.map((w, t) => (t < c.payYears ? Math.round(w * ratio) : w));
-    const paid = cash.map((_, t) => Math.min(t, c.payYears) * freq * gross100k * units);
-    const rate = cash.map((w, t) => (paid[t] > 0 ? w / paid[t] : 0));
-    result.lowSurrender = { ratio, premiumDiscount, deltaP100k: per100k.gross - gross100k, gross100k, monthlyGross: gross100k * units, cash, rate, paid };
+    const { ratio, lapseRate } = a.lowSurrender;
+    const m = c.payYears;
+    // 해지급부: 납입기간 중 해지하면 표준형 해지환급금(준비금 − 해약공제)의 ratio를 준다. 연중앙 해지 → (W_t + W_{t+1})/2
+    const wT3 = sur.cash.map((x) => x / input.S0);                    // 표준형 해지환급금, 기준보험금 1단위당
+    const payout = wT3.map((_, t) => (t < m ? (ratio * (wT3[t] + (wT3[t + 1] ?? wT3[t]))) / 2 : 0));
+    const lapse = { rate: lapseRate, years: m };
+    const kL = commutation({ interest: a.interest, q: rs.q, f: waiver ? rs.f : zero, lapse }, input.age, n);
+    const ksL = commutation({ interest: a.standardInterest, q: rs.qStd, f: waiver ? rs.fStd : zero, lapse }, input.age, n);
+    // CSV_t = Σ_{u≥t} Wx_u·해지급부_u
+    const csvOf = (kk: Commutation) => {
+      const out = new Array<number>(n + 2).fill(0);
+      for (let t = n; t >= 0; t--) out[t] = out[t + 1] + kk.Wx[t] * payout[t];
+      return out;
+    };
+    const csvL = csvOf(kL), csvsL = csvOf(ksL);
+    const pL = premium(kL, c, e, csvL[0]);
+    const psL = premium(ksL, c, e, csvsL[0]);
+    const net100k = r0(pL.net), gross100k = r0(pL.gross);
+    // 납입 완료 후에는 해지율이 0이라 저해지형 준비금이 표준형과 같아진다 → 환급금도 같다
+    const cash = sur.cash.map((x, t) => (t < m ? Math.round(x * ratio) : x));
+    const paid = cash.map((_, t) => Math.min(t, m) * freq * gross100k * units);
+    const rate = cash.map((x, t) => (paid[t] > 0 ? x / paid[t] : 0));
+    result.lowSurrender = {
+      ratio, lapseRate,
+      premiumDiscount: per100k.gross > 0 ? (per100k.gross - gross100k) / per100k.gross : 0,
+      deltaP100k: per100k.gross - gross100k,
+      net100k, gross100k, monthlyGross: gross100k * units,
+      pvCsv: csvL[0],
+      reserve100k: reserves(kL, c, e, pL, csvL).map(r0),
+      reserveStd100k: reserves(ksL, c, e, psL, csvsL).map(r0),
+      cash, rate, paid,
+    };
   }
   return result;
 }

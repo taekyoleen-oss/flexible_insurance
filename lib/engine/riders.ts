@@ -29,7 +29,7 @@ export function riderCommutation(b: RiderBasis, age: number, n: number): Commuta
   for (let t = 0; t < len; t++) { Dx[t] = lx[t] * v ** t; Cx[t] = lx[t] * (b.event[age + t] ?? 0) * v ** (t + 0.5); }
   const rev = (a: number[]) => { const out = new Array<number>(a.length); let s = 0; for (let t = a.length - 1; t >= 0; t--) { s += a[t]; out[t] = s; } return out; };
   const Nx = rev(Dx);
-  return { n, v, lx, lxp: lx, Dx, Dpx: Dx, Cx, Nx, Npx: Nx };
+  return { n, v, lx, lxp: lx, Dx, Dpx: Dx, Cx, Wx: new Array<number>(len).fill(0), Nx, Npx: Nx };
 }
 
 /** 특약 보험료(기준금액 1단위당). 주계약과 같은 사업비 구조를 쓰고, 면책은 첫해 급부 배율로 반영 */

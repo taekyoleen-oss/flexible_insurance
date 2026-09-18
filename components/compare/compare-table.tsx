@@ -21,7 +21,9 @@ export function CompareTable({ chartWidth }: { chartWidth?: number }) {
   const { budget, rows } = useCompareRows();
   const age = state.profile.age;
   const n = Math.max(...rows.map((r) => r.S.length));
-  const data = Array.from({ length: n }, (_, t) => ({ age: age + t, level: rows[0].S[t] ?? null, combo: rows[1].S[t] ?? null, designed: rows[2].S[t] ?? null }));
+  // 암보험은 '정기 + 종신 조합' 행이 없으므로 순번이 아니라 id로 찾는다
+  const byId = (id: CompareRow["id"]) => rows.find((x) => x.id === id);
+  const data = Array.from({ length: n }, (_, t) => ({ age: age + t, level: byId("level")?.S[t] ?? null, combo: byId("combo")?.S[t] ?? null, designed: byId("designed")?.S[t] ?? null }));
   const cols: [string, (r: CompareRow) => string][] = [
     ["초기 보험금", (r) => won(r.S[0])], ["월 보험료", (r) => won(r.monthly)], ["총 납입", (r) => won(r.totalPaid)],
     [`납입 완료(${state.payYears}년) 환급률`, (r) => pct(r.cashRateAtPayEnd)], ["보험금 현가", (r) => won(r.pvBenefit)],

@@ -28,14 +28,15 @@ export function nStar(k: Commutation, m: number, mm: number): number {
 }
 
 /**
- * 원본 `P` 시트(정기)·`총괄` 시트(종신공제) 산식. netAdjust는 저해지 보험료 인하액(순보험료에서 차감).
+ * 원본 `P` 시트(정기)·`총괄` 시트(종신공제) 산식.
+ * pvCsv는 저해지·무해지형의 해지급부 현가(Ā_x = M̄_x + CSV_x). 급부 현가에 더해져 순보험료·기준연납·준비금에 모두 반영된다.
  */
-export function premium(k: Commutation, c: Contract, e: Expenses, netAdjust = 0): PremiumResult {
+export function premium(k: Commutation, c: Contract, e: Expenses, pvCsv = 0): PremiumResult {
   const { n, Dpx, Nx, Npx } = k;
   const m = c.payYears, mm = c.freq;
-  const pvb = pvBenefit(k, c.S, c.C);
+  const pvb = pvBenefit(k, c.S, c.C) + pvCsv;
   const N = nStar(k, m, mm);
-  const net = pvb / N - netAdjust;
+  const net = pvb / N;
   const base = pvb / (Npx[0] - Npx[Math.min(n, 20)]);
   if (e.model === "method") {
     const lAlpha = ((e.alphaS + e.alphaP * base) * Dpx[0]) / N;

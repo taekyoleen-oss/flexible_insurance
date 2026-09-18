@@ -8,8 +8,8 @@ describe("Excel 검산 워크북", () => {
   const r = evaluate(s);
   const wb = buildWorkbook(s, r);
   const cell = (sheet: string, addr: string) => wb.Sheets[sheet][addr] as XLSX.CellObject | undefined;
-  it("시트 6개, 계산기수 행 수 = n+1, 설계 스케줄 배수가 엔진과 같다", () => {
-    expect(wb.SheetNames).toEqual([...SHEETS]);
+  it("저해지 OFF면 시트 6개, 계산기수 행 수 = n+1, 설계 스케줄 배수가 엔진과 같다", () => {
+    expect(wb.SheetNames).toEqual(SHEETS.slice(0, 6));
     const k = XLSX.utils.sheet_to_json<Record<string, number>>(wb.Sheets[SHEETS[1]]);
     expect(k).toHaveLength(r.n + 1);
     expect(k[0].lx).toBe(100000);
@@ -27,13 +27,15 @@ describe("Excel 검산 워크북", () => {
     expect(cell(SHEETS[3], "B32")?.v).toBe(r.monthly.gross);
   });
   it("계산기수·준비금 시트는 값이 아니라 수식이다 (캐시 값은 엔진과 같다)", () => {
-    expect(cell(SHEETS[1], "E3")?.f).toBe("E2*(1-C2)");
-    expect(cell(SHEETS[1], "F3")?.f).toBe("F2*(1-C2-D2+C2*D2/2)");
-    expect(cell(SHEETS[1], "G2")?.f).toMatch(/^E2\*'입력·가정'!\$B\$\d+\^A2$/);
-    expect(cell(SHEETS[1], "I2")?.f).toMatch(/^E2\*C2\*/);
-    expect(cell(SHEETS[1], "J2")?.f).toBe(`SUM(G2:G${r.n + 2})`);
-    expect(cell(SHEETS[1], "J2")?.v).toBeCloseTo(cell(SHEETS[1], "J3")!.v as number + (cell(SHEETS[1], "G2")!.v as number), 6);
-    expect(cell(SHEETS[4], "E22")?.f).toMatch(/^IF\('위험률·계산기수'!G22<=0,0,\(SUMPRODUCT\(/);
+    expect(cell(SHEETS[1], "F3")?.f).toBe("F2*(1-C2-E2+C2*E2/2)");
+    expect(cell(SHEETS[1], "G3")?.f).toBe("G2*(1-C2-D2-E2+(C2*D2+C2*E2+D2*E2)/2)");
+    expect(cell(SHEETS[1], "H2")?.f).toMatch(/^F2\*'입력·가정'!\$B\$\d+\^A2$/);
+    expect(cell(SHEETS[1], "J2")?.f).toMatch(/^F2\*C2\*\(1-E2\/2\)\*/);
+    expect(cell(SHEETS[1], "E2")?.v).toBe(0);                       // 표준형은 해지율 0
+    expect(cell(SHEETS[1], "K2")?.v).toBe(0);                       // → 해지 계산기수 Wx도 0
+    expect(cell(SHEETS[1], "L2")?.f).toBe(`SUM(H2:H${r.n + 2})`);
+    expect(cell(SHEETS[1], "L2")?.v).toBeCloseTo(cell(SHEETS[1], "L3")!.v as number + (cell(SHEETS[1], "H2")!.v as number), 6);
+    expect(cell(SHEETS[4], "E22")?.f).toMatch(/^IF\('위험률·계산기수'!H22<=0,0,\(SUMPRODUCT\(/);
     expect(cell(SHEETS[4], "G22")?.f).toBe("ROUND(E22*100000,0)");
     expect(Math.round((cell(SHEETS[4], "E22")!.v as number) * 1e5)).toBe(r.reserve100k[20]);
     expect(cell(SHEETS[4], "L22")?.f).toBe("ROUND(MAX(I22-K22,0),0)");
@@ -53,7 +55,22 @@ describe("Excel 검산 워크북", () => {
   it("준비금 시트: 20년 행이 엔진 값과 같다", () => {
     const res = XLSX.utils.sheet_to_json<Record<string, number>>(wb.Sheets[SHEETS[4]]);
     expect(res[20]["해약환급금(표준형)"]).toBe(r.surrender.cash[20]);
-    expect(res[20]["적용준비금(10만원당)"]).toBe(r.reserve100k[20]);
+    expect(res[20]["표준형 적용준비금(10만원당)"]).toBe(r.reserve100k[20]);
+  });
+  it("저해지 ON이면 저해지 계산기수 시트 2장이 붙고 보험료가 거기서 온다", () => {
+    const sl = reducer(s, { type: "lowSurrender", on: true });
+    const rl = evaluate(sl);
+    const wl = buildWorkbook(sl, rl);
+    const c = (sheet: string, addr: string) => wl.Sheets[sheet][addr] as XLSX.CellObject | undefined;
+    expect(wl.SheetNames).toEqual([...SHEETS]);
+    expect(c(SHEETS[6], "E2")?.v).toBe(0.03);                                  // 적용해지율 w
+    expect(c(SHEETS[6], "K2")?.f).toMatch(/^F2\*E2\*/);                       // 해지 계산기수 Wx
+    expect(c(SHEETS[6], "S13")?.v).toBe(rl.lowSurrender!.gross100k);           // 저해지 영업보험료(10만원당)
+    expect(c(SHEETS[3], "B27")?.f).toBe("'저해지 계산기수'!S13");
+    expect(c(SHEETS[3], "B27")?.v).toBe(rl.lowSurrender!.gross100k);
+    const res = XLSX.utils.sheet_to_json<Record<string, number>>(wl.Sheets[SHEETS[4]]);
+    expect(res[10]["해약환급금(고객)"]).toBe(rl.lowSurrender!.cash[10]);
+    expect(Math.round((c(SHEETS[6], "P12")!.v as number) * 1e5)).toBe(rl.lowSurrender!.reserve100k[10]);
   });
   it("워크북을 바이너리로 쓸 수 있다", () => {
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;

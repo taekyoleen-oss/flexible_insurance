@@ -1,5 +1,5 @@
 "use client";
-import { BENEFIT_LABEL } from "@/lib/state";
+import { assumptionOf, BENEFIT_LABEL, lowKind } from "@/lib/state";
 import { FormulaHelp } from "@/components/formula-help";
 import { useDesign } from "@/components/design-provider";
 import { Button } from "@/components/ui";
@@ -11,7 +11,8 @@ import { reserveCsv, reserveRows, reserveHeaders } from "@/lib/reserve-table";
 export function ReserveTable() {
   const { state, result: r } = useDesign();
   const rows = reserveRows(state, r);
-  const eff = state.lowSurrender ? " (저해지 적용)" : "";
+  const ls = assumptionOf(state).lowSurrender;
+  const eff = state.lowSurrender ? ` (${lowKind(ls.ratio)} · 적용해지율 ${pct(ls.lapseRate)})` : "";
   const download = () => downloadJson(`준비금표_${autoName(state).replace(/[^\w가-힣]+/g, "_")}.csv`, reserveCsv(rows), "text/csv");
   return (
     <details className="rounded-lg border border-navy/10 bg-white p-4 shadow-sm">

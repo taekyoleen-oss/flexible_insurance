@@ -5,7 +5,7 @@ import { PremiumSummary } from "@/components/result/premium-summary";
 import { ResultChart } from "@/components/result/result-chart";
 import { Button, Card } from "@/components/ui";
 import { won } from "@/lib/format";
-import { celebrations } from "@/lib/state";
+import { celebrations, assumptionOf, lowKind } from "@/lib/state";
 
 /** 공유 링크로 열리는 읽기 전용 1열 뷰 */
 export function SharedView({ onImport, app }: { onImport?: () => void; app: string }) {
@@ -14,7 +14,7 @@ export function SharedView({ onImport, app }: { onImport?: () => void; app: stri
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <Card title="보험금 스케줄">
-        <p className="mb-2 text-sm text-navy/70">{p.age}세 {p.sex === "M" ? "남" : "여"} · 기준보험금 {won(state.S0)} · {state.payYears}년납{state.lowSurrender ? " · 저해지" : ""}</p>
+        <p className="mb-2 text-sm text-navy/70">{p.age}세 {p.sex === "M" ? "남" : "여"} · 기준보험금 {won(state.S0)} · {state.payYears}년납{state.lowSurrender ? ` · ${lowKind(assumptionOf(state).lowSurrender.ratio)}` : ""}</p>
         <ScheduleEditor height={280} amount readOnly />
         {cels.length > 0 && <p className="mt-2 text-xs text-navy/60">축하금: {cels.map((c) => `${c.fromAge}세 ${won(c.multiple * state.S0)}`).join(" · ")}</p>}
       </Card>

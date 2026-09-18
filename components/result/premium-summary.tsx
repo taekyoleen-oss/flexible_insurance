@@ -5,7 +5,7 @@ import { Fragment } from "react";
 import { useDesign } from "@/components/design-provider";
 import { Card } from "@/components/ui";
 import { pct, won } from "@/lib/format";
-import { effective } from "@/lib/state";
+import { effective, lowKind } from "@/lib/state";
 import { riderPremiums, riderTotal } from "@/lib/riders";
 
 export function PremiumSummary() {
@@ -14,7 +14,7 @@ export function PremiumSummary() {
   const eff = effective(r, m);
   const riders = riderPremiums(state).filter((x) => x.on);
   const extra = riderTotal(riders);
-  const HELP: Partial<Record<string, FormulaId>> = { "월 순보험료": "net", [`납입 완료(${m}년) 환급률`]: "rate", "저해지 조건": "lowSurrender" };
+  const HELP: Partial<Record<string, FormulaId>> = { "월 순보험료": "net", [`납입 완료(${m}년) 환급률`]: "rate", [`${lowKind(eff.ratio)} 조건`]: "lowSurrender" };
   const rows: [string, string][] = [
     ["월 순보험료", won(eff.net)],   // HELP 맵으로 "?" 연결
     ["총 납입보험료", won(eff.totalPaid)],
@@ -23,8 +23,8 @@ export function PremiumSummary() {
     ["최대 보험금", won(Math.max(...r.S) * state.S0)],
   ];
   if (eff.isLow) {
-    rows.push(["표준형 월 영업보험료 (저해지 미적용)", won(eff.standardMonthly)]);
-    rows.push(["저해지 조건", `납입기간(${m}년) 중 보험료 −${Math.round(eff.premiumDiscount * 100)}% · 해약환급금 ${Math.round(eff.ratio * 100)}%, 이후 표준과 동일`]);
+    rows.push(["표준형 월 영업보험료 (환급형)", won(eff.standardMonthly)]);
+    rows.push([`${lowKind(eff.ratio)} 조건`, `납입기간(${m}년) 중 해약환급금 ${Math.round(eff.ratio * 100)}% · 적용해지율 ${pct(eff.lapseRate)} → 보험료 −${pct(eff.premiumDiscount)}, 납입 후 표준과 동일`]);
   }
   return (
     <Card title="보험료">
@@ -42,7 +42,7 @@ export function PremiumSummary() {
           <dt className="font-medium text-navy">최종 합계 (주계약 + 특약 {riders.length}건)</dt><dd className="font-mono font-medium text-navy">{won(eff.monthly + extra)}</dd>
         </dl>
       )}
-      <p className="mt-3 text-xs text-navy/50">가정 {r.meta.assumptionId} ({r.meta.assumptionVersion}) · 납입면제 {r.meta.waiver ? "ON" : "OFF"} · 저해지 {r.meta.lowSurrender ? "ON" : "OFF"}</p>
+      <p className="mt-3 text-xs text-navy/50">가정 {r.meta.assumptionId} ({r.meta.assumptionVersion}) · 납입면제 {r.meta.waiver ? "ON" : "OFF"} · {eff.isLow ? `${lowKind(eff.ratio)} (적용해지율 ${pct(eff.lapseRate)})` : "표준형(완전 환급)"}</p>
     </Card>
   );
 }

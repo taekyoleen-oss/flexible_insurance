@@ -6,7 +6,7 @@ import { useDesign } from "@/components/design-provider";
 import { ResultChart } from "@/components/result/result-chart";
 import { Button } from "@/components/ui";
 import { manwon, pct, won } from "@/lib/format";
-import { celebrations, effective, PRODUCT_LABEL } from "@/lib/state";
+import { celebrations, effective, lowKind, PRODUCT_LABEL } from "@/lib/state";
 import { riderPremiums, riderTotal } from "@/lib/riders";
 
 const YEARS = [1, 2, 3, 5, 10, 15, 20, 30];
@@ -30,7 +30,7 @@ export default function PrintPage() {
 
       <section className="print-page space-y-3">
         <h1 className="font-display text-2xl text-navy">{PRODUCT_LABEL[p.product]} 제안서</h1>
-        <p className="text-navy/70">{today} · 피보험자 {p.age}세 {p.sex === "M" ? "남" : "여"} · 기준보험금 {won(state.S0)} · {state.payYears}년납 월납{state.waiver ? " · 납입면제" : ""}{state.lowSurrender ? " · 저해지" : ""}</p>
+        <p className="text-navy/70">{today} · 피보험자 {p.age}세 {p.sex === "M" ? "남" : "여"} · 기준보험금 {won(state.S0)} · {state.payYears}년납 월납{state.waiver ? " · 납입면제" : ""}{eff.isLow ? ` · ${lowKind(eff.ratio)}` : ""}</p>
         <ScheduleEditor height={300} amount readOnly />
         {cels.length > 0 && <p className="text-xs text-navy/60">축하금: {cels.map((c) => `${c.fromAge}세 ${won(c.multiple * state.S0)}`).join(" · ")}</p>}
         <dl className="grid grid-cols-[1fr_auto] gap-y-1">
@@ -40,7 +40,7 @@ export default function PrintPage() {
           <Row k="총 납입보험료" v={won(eff.totalPaid)} />
           <Row k="초기 보험금 / 최대 보험금" v={`${won(r.S[0] * state.S0)} / ${won(Math.max(...r.S) * state.S0)}`} />
           <Row k={`납입 완료(${state.payYears}년) 환급률`} v={pct(eff.rate[state.payYears])} />
-          {eff.isLow && <Row k="저해지 조건" v={`납입기간 중 보험료 −${Math.round(eff.premiumDiscount * 100)}% · 환급금 ${Math.round(eff.ratio * 100)}%`} />}
+          {eff.isLow && <Row k={`${lowKind(eff.ratio)} 조건`} v={`납입기간 중 환급금 ${Math.round(eff.ratio * 100)}% · 적용해지율 ${pct(eff.lapseRate)} → 보험료 −${pct(eff.premiumDiscount)}`} />}
         </dl>
       </section>
 
@@ -50,7 +50,7 @@ export default function PrintPage() {
         <table className="w-full text-xs"><thead><tr className="text-navy/60"><th className="text-left">경과</th><th className="text-right">납입 누계</th><th className="text-right">해약환급금</th><th className="text-right">환급률</th></tr></thead>
           <tbody>{YEARS.filter((t) => t <= r.n).map((t) => <tr key={t} className="border-t border-navy/10 font-mono"><td>{t}년</td><td className="text-right">{won(eff.paid[t])}</td><td className="text-right">{won(eff.cash[t])}</td><td className="text-right">{pct(eff.rate[t])}</td></tr>)}</tbody></table>
         <CompareTable chartWidth={680} />
-        <p className="text-xs text-navy/60">가정: {a.label} · 예정이율 {pct(a.interest, 2)} · 표준이율 {pct(a.standardInterest, 2)} · 위험률 제7회 경험생명표 · 이 제안서는 설계 참고용이며 실제 계약 조건은 약관에 따릅니다.</p>
+        <p className="text-xs text-navy/60">가정: {a.label} · 예정이율 {pct(a.interest, 2)} · 표준이율 {pct(a.standardInterest, 2)} · 위험률 {p.product === "cancer" ? "암발생률(생명장기제2024-112호)" : "제7회 경험생명표"}{eff.isLow ? ` · 적용해지율 ${pct(eff.lapseRate)}(납입기간 중)` : ""} · 이 제안서는 설계 참고용이며 실제 계약 조건은 약관에 따릅니다.</p>
       </section>
 
       {withAgent && (

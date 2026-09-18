@@ -8,8 +8,12 @@ export interface RateTable {
   F: RateSet;
 }
 
-/** 산출 기초: 이율 + 연령별 사망률·납입면제율 */
-export interface Basis { interest: number; q: number[]; f: number[] }
+/** 산출 기초: 이율 + 연령별 사망률·납입면제율 (+ 저해지형의 적용해지율) */
+export interface Basis {
+  interest: number; q: number[]; f: number[];
+  /** 적용해지율 w: 납입기간(years) 동안 매년 rate, 납입 완료 후에는 0 */
+  lapse?: { rate: number; years: number };
+}
 
 export interface ExpensesMethod {
   model: "method";
@@ -41,7 +45,8 @@ export interface AssumptionSet {
   interest: number; standardInterest: number;
   expenses: Expenses;
   waiver: boolean;
-  lowSurrender: { ratio: number; premiumDiscount: number };  // 납입기간 중 환급금 비율, 보험료 인하율
+  /** 저해지·무해지형: 납입기간 중 해지환급금 = 표준형 × ratio(0이면 무해지), 적용해지율 lapseRate */
+  lowSurrender: { ratio: number; lapseRate: number };
   waitFactor?: number;   // 면책계수: 첫해 급부 배율(암 90일 면책 → 3/4). 없으면 1
   needs: { discount: number; livingRatio: number; selfRatio: number; educationPerChild: number; finalExpense: number; independenceAge: number; retirementAge: number };
 }

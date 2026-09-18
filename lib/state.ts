@@ -263,7 +263,7 @@ export function pruneAnchors(S: number[], anchors: number[], x: number, first: n
   return out;
 }
 
-/** 고객이 실제로 내는 보험료 기준 요약. 저해지 ON이면 인하된 보험료·환급금을 쓴다. */
+/** 고객이 실제로 내는 보험료 기준 요약. 저해지·무해지 ON이면 그 기초로 다시 산출한 보험료·준비금·환급금을 쓴다. */
 export function effective(r: EngineResult, payYears: number) {
   const low = r.lowSurrender;
   const gross100k = low?.gross100k ?? r.per100k.gross;
@@ -273,17 +273,23 @@ export function effective(r: EngineResult, payYears: number) {
     isLow: low !== undefined,
     gross100k,
     monthly,
-    net: r.monthly.net,                       // 순보험료는 표준과 같고 영업보험료만 인하된다
+    net: (low?.net100k ?? r.per100k.net) * r.units,   // 해지급부가 급부 현가에 들어가므로 순보험료도 달라진다
     deltaP100k: low?.deltaP100k ?? 0,
     ratio: low?.ratio ?? 1,
+    lapseRate: low?.lapseRate ?? 0,
     premiumDiscount: low?.premiumDiscount ?? 0,
     totalPaid: paid[Math.min(payYears, paid.length - 1)],
     cash: low?.cash ?? r.surrender.cash,
     rate: low?.rate ?? r.surrender.rate,
+    reserve100k: low?.reserve100k ?? r.reserve100k,
+    reserveStd100k: low?.reserveStd100k ?? r.reserveStd100k,
     paid,
     standardMonthly: r.monthly.gross,
   };
 }
+
+/** 저해지 / 무해지 표기. 환급률 0이면 무해지환급형 */
+export const lowKind = (ratio: number) => (ratio === 0 ? "무해지환급형" : `저해지환급형 ${Math.round(ratio * 100)}%`);
 
 /** 월 보험료(원) → 기준보험금(원). 가장 가까운 1천만원 단위로 맞춘다 */
 export const s0FromMonthly = (monthly: number, gross100k: number) => roundS0((monthly * 1e5) / gross100k);
