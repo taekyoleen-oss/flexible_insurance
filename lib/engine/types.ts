@@ -8,9 +8,15 @@ export interface RateTable {
   F: RateSet;
 }
 
-/** 산출 기초: 이율 + 연령별 사망률·납입면제율 (+ 저해지형의 적용해지율) */
+/** 산출 기초: 이율 + 연령별 탈퇴율·납입면제율 (+ 급부 발생률, 저해지형의 적용해지율) */
 export interface Basis {
-  interest: number; q: number[]; f: number[];
+  interest: number;
+  /** 탈퇴율: 그 담보가 소멸하는 사유 전부(사망형이면 사망률, 진단형이면 사망률 + 발생률) */
+  q: number[];
+  /** 납입면제 발생률 */
+  f: number[];
+  /** 급부 발생률(C_x의 분자). 없으면 q — 사망보장처럼 탈퇴 = 급부인 경우 */
+  event?: number[];
   /** 적용해지율 w: 납입기간(years) 동안 매년 rate, 납입 완료 후에는 0 */
   lapse?: { rate: number; years: number };
 }

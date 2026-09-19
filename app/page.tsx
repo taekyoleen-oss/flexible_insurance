@@ -33,6 +33,20 @@ export default function Home() {
           ))}
         </div>
       </section>
+      <section>
+        <h2 className="mb-3 font-display text-xl text-navy">일반 상품 산출</h2>
+        <Card className="max-w-3xl" title="상품 만들기">
+          <p className="text-sm text-navy/70">
+            설계형이 아닌 보통 상품은 여기서 만듭니다. 담보마다 위험률(연령별 급부 발생률·탈퇴율)을 넣고 보험기간·납입기간·보장금액·납입면제·사업비를 정하면
+            산출방법서와 같은 순서로 보험료·책임준비금·해약환급금이 나오고, 연령 구간별 배수로 보험금을 증액·감액할 수 있습니다.
+          </p>
+          <p className="mb-3 mt-1 text-xs text-navy/50">
+            위험률은 셀 직접 입력 · Excel 붙여넣기 · CSV/XLSX 업로드 · 기존 표(제7회 경험생명표·암발생률·암입원율) 불러오기로 넣습니다.
+            2대질병 진단, 정기·종신 사망, 암 진단 + 입원일당, 만기환급형, 무해지환급형 예시를 바로 열 수 있습니다.
+          </p>
+          <Button primary className="self-start" onClick={() => router.push("/builder")}>상품 만들기 열기</Button>
+        </Card>
+      </section>
       <section className="max-w-3xl"><LibraryPanel /></section>
       <section>
         <h2 className="mb-3 font-display text-xl text-navy">샘플 설계</h2>

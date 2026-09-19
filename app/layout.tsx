@@ -25,6 +25,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             <nav className="mx-auto flex max-w-[1536px] flex-wrap items-center gap-x-5 gap-y-1 px-4 py-3">
               <ProductTitle />
               <Link href="/design" className="text-sm text-navy/70 hover:text-navy">설계</Link>
+              <Link href="/builder" className="text-sm text-navy/70 hover:text-navy">상품 만들기</Link>
               <Link href="/compare" className="text-sm text-navy/70 hover:text-navy">비교</Link>
               <Link href="/print" className="text-sm text-navy/70 hover:text-navy">제안서</Link>
               <Link href="/redesign" className="text-sm text-navy/70 hover:text-navy">재설계</Link>

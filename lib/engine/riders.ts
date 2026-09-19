@@ -1,4 +1,4 @@
-import type { Commutation } from "./commutation";
+import { commutation, type Commutation } from "./commutation";
 import { premium, type PremiumResult } from "./premium";
 import type { Contract, Expenses } from "./types";
 
@@ -20,16 +20,10 @@ export const RIDERS: RiderDef[] = [
 /** 특약 산출 기초: 연령별 탈퇴율(사망 + 소멸 사유)과 급부 발생률(lump: 발생률, daily: 연간 기대 입원일수) */
 export interface RiderBasis { interest: number; exit: number[]; event: number[] }
 
-/** 특약 계산기수. l_{x+1} = l_x(1 − exit_x), C_x = l_x·event_x·v^{t+½}. 납입 집단 = 급부 집단 */
+const NO_RATE: number[] = [];
+/** 특약 계산기수. 납입면제·해지율이 없는 주계약 계산기수와 같다(f = 0 이면 l′ = l) */
 export function riderCommutation(b: RiderBasis, age: number, n: number): Commutation {
-  const v = 1 / (1 + b.interest), len = n + 1;
-  const lx = new Array<number>(len); lx[0] = 100000;
-  for (let t = 0; t < n; t++) lx[t + 1] = lx[t] * Math.max(0, 1 - (b.exit[age + t] ?? 0));
-  const Dx = new Array<number>(len), Cx = new Array<number>(len);
-  for (let t = 0; t < len; t++) { Dx[t] = lx[t] * v ** t; Cx[t] = lx[t] * (b.event[age + t] ?? 0) * v ** (t + 0.5); }
-  const rev = (a: number[]) => { const out = new Array<number>(a.length); let s = 0; for (let t = a.length - 1; t >= 0; t--) { s += a[t]; out[t] = s; } return out; };
-  const Nx = rev(Dx);
-  return { n, v, lx, lxp: lx, Dx, Dpx: Dx, Cx, Wx: new Array<number>(len).fill(0), Nx, Npx: Nx };
+  return commutation({ interest: b.interest, q: b.exit, f: NO_RATE, event: b.event }, age, n);
 }
 
 /** 특약 보험료(기준금액 1단위당). 주계약과 같은 사업비 구조를 쓰고, 면책은 첫해 급부 배율로 반영 */

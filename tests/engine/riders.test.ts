@@ -19,7 +19,7 @@ describe("특약", () => {
     expect(rider.gross).toBeGreaterThan(0);
     expect(rider.gross).toBeLessThan(main.perUnit.gross);
     expect(riderPremium(k, age, 20, 12, a.expenses, 0.75).gross).toBeLessThan(rider.gross);
-    expect(k.lx[n]).toBeLessThan(k.lx[0]); expect(k.lxp).toBe(k.lx);
+    expect(k.lx[n]).toBeLessThan(k.lx[0]); expect(k.lxp).toEqual(k.lx);   // 납입면제율 f = 0 → 납입 집단 = 급부 집단
   });
   it("상태: 특약 6종 기본 꺼짐, 켜고 금액을 바꾸면 보험료가 비례해 바뀌고 합계에 더해진다", () => {
     let s = initialState();

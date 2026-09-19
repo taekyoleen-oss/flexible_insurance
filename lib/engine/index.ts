@@ -14,3 +14,4 @@ export { needs, annuity, recommendPreset, childNeedCurve, debtNeedCurve, retireN
 export { remainingPrincipal, lifeExpectancy, inheritanceTax, regularizeShape, INHERITANCE_BRACKETS, type DebtMethod, type ShapeRules } from "./finance";
 export { compareAtBudget, type CompareRow, type CompareId } from "./compare";
 export { redesign, pvUnit, noAcquisition, type RedesignInput, type RedesignResult } from "./redesign";
+export { computePlan, stepMultiple, coverageYears, planTermYears, BENEFIT_KINDS, type BenefitKind, type PlanCoverage, type PlanInput, type PlanResult, type PlanCoverageResult, type PlanTotals, type PlanStep, type PlanPoint } from "./plan";
