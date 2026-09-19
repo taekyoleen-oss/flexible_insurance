@@ -12,6 +12,8 @@ const SERIES = ["#1b2845", "#4a90c2", "#a34a1e", "#7a9e7e", "#8a6fae", "#c2a24a"
 export function PremiumCard() {
   const { state: s, result: r } = usePlan();
   const eff = r.effective, low = r.low;
+  // 만기환급금·축하금은 해약환급금이 아니라 급부로 나가므로 환급률에 안 잡힌다. 납입 완료 시점까지 받은 생존급부를 따로 보여 준다
+  const paidOut = r.survival.slice(0, r.payYears + 1).reduce((a, b) => a + b, 0);
   return (
     <Card title="보험료">
       <div className="mb-3">
@@ -40,7 +42,8 @@ export function PremiumCard() {
       </table>
       <dl className="mt-3 grid grid-cols-[1fr_auto] gap-y-1 border-t border-navy/10 pt-2 text-sm">
         <dt className="text-navy/60">총 납입보험료 ({r.payYears}년)</dt><dd className="font-mono">{won(eff.totalPaid)}</dd>
-        <dt className="text-navy/60">납입 완료 환급률</dt><dd className="font-mono">{pct(eff.rate[r.payYears] ?? 0)}</dd>
+        <dt className="text-navy/60">납입 완료 환급률</dt>
+        <dd className="font-mono">{pct(eff.rate[r.payYears] ?? 0)}{paidOut > 0 && <span className="text-navy/60"> + 생존급부 {won(paidOut)}</span>}</dd>
         {low && <><dt className="text-navy/60">표준형(완전 환급) 보험료</dt><dd className="font-mono">{won(r.standard.monthlyGross)}</dd></>}
         {low && <><dt className="text-navy/60">{low.ratio === 0 ? "무해지" : `저해지 ${Math.round(low.ratio * 100)}%`} 조건 (해지율 {pct(low.lapseRate)})</dt><dd className="font-mono">−{pct(low.premiumDiscount)}</dd></>}
       </dl>
