@@ -9,13 +9,15 @@ const Mark = ({ ok }: { ok: boolean }) => <span className={ok ? "text-sky" : "te
 
 /** 보험료를 만들려면 무엇을 넣어야 하는지 + 그 입력으로 만들 수 있는 보장 */
 export function PlanGuide() {
-  const { state: s, dispatch, result: r } = usePlan();
+  const { state: s, dispatch, result: r, sheet } = usePlan();
 
   const checks: { ok: boolean; label: string; detail: string }[] = [
-    { ok: s.coverages.every((c) => c.grid.ages.length > 0 && c.grid.exit.some((x) => x > 0)),
-      label: "위험률 (담보마다)", detail: "연령별 급부 발생률과 탈퇴율. 직접 입력·Excel 붙여넣기·CSV/XLSX 업로드·기존 표 불러오기 중 아무거나" },
-    { ok: s.coverages.every((c) => rateCoverage(c.grid, s.age, Math.min(c.endAge, s.age + r.n - 1)).ok),
+    { ok: s.sheet.columns.length > 0 && sheet.errorCount === 0,
+      label: "위험률 시트", detail: "연령 행 × 위험률 열. 칸에 숫자나 수식(=B3*0.65)을 넣고, Excel 붙여넣기·CSV/XLSX 업로드·기존 표 불러오기로도 채웁니다" },
+    { ok: s.coverages.every((c) => rateCoverage(s.sheet, s.age, Math.min(c.endAge, s.age + r.n - 1)).ok),
       label: "위험률 연령 범위", detail: `가입나이 ${s.age}세부터 각 담보 만기까지 덮어야 합니다. 모자라면 가장 가까운 연령 값을 이어 씁니다` },
+    { ok: !s.waiver || s.sheet.columns.some((c) => c.waiver),
+      label: "납입면제 열", detail: "납입면제를 쓰면 열 하나 이상을 납입면제로 표시해야 합니다 — 기존 장해율을 불러오거나 수식으로 만드세요" },
     { ok: s.coverages.every((c) => c.amount > 0), label: "보장금액", detail: "담보마다. 일당형은 1일당 금액" },
     { ok: r.n > 0 && s.payYears > 0, label: "보험기간 · 납입기간 · 납입주기", detail: `현재 ${r.n}년 보장 · ${r.payYears}년납 · 연 ${s.freq}회` },
     { ok: s.interest > 0, label: "예정이율 · 표준이율", detail: `${pct(s.interest, 2)} / ${pct(s.standardInterest, 2)}` },

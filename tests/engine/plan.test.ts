@@ -51,7 +51,7 @@ describe("급부 유형", () => {
   it("진단형: 탈퇴 = 사망 + 발생이라 같은 발생률의 사망형보다 보험료가 낮다", () => {
     const inc = q.map((x) => x * 0.4);
     const dx = computePlan(base, [cov({ kind: "incidence", event: inc, exit: q.map((x, i) => x + inc[i]) })]);
-    const dn = computePlan(base, [cov({ kind: "death", exit: inc })]);   // 같은 발생률을 사망률로 쓴 경우
+    const dn = computePlan(base, [cov({ kind: "death", event: inc, exit: inc })]);   // 같은 발생률을 사망률로 쓴 경우
     expect(dx.standard.monthlyGross).toBeLessThan(dn.standard.monthlyGross);
     expect(dx.standard.monthlyGross).toBeGreaterThan(0);
   });

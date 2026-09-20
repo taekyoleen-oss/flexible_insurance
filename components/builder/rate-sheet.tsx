@@ -1,25 +1,10 @@
 "use client";
 import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { usePlan } from "./plan-provider";
-import { Button, Card, Field, NumInput } from "@/components/ui";
-import { kindMeta } from "@/lib/plan-state";
-import { parseRateFile, parseRateText, rateCoverage, rateCsv, type RateGrid } from "@/lib/plan-rates";
-
-/** 한 칸. 타이핑 중에는 문자열을 그대로 두고 blur/Enter에 숫자로 확정한다 */
-function Cell({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
-  const [text, setText] = useState(String(value));
-  useEffect(() => setText(String(value)), [value]);
-  const commit = () => {
-    const n = Number(text.replace(/[,\s]/g, ""));
-    if (text.trim() !== "" && Number.isFinite(n) && n !== value) onCommit(n);
-    else setText(String(value));
-  };
-  return (
-    <input value={text} inputMode="decimal" onChange={(e) => setText(e.target.value)} onBlur={commit}
-      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-      className="w-full rounded border border-transparent bg-transparent px-1 py-0.5 text-right font-mono text-xs hover:border-navy/20 focus:border-sky focus:bg-white focus:outline-none" />
-  );
-}
+import { Button, Card, Input, NumInput, Select } from "@/components/ui";
+import { parseRateFile, parseRateText, rateCsv, RATE_KINDS, RATE_PRESETS, type RateKind } from "@/lib/plan-rates";
+import { CELL_ERROR_KO, colLetter, isFormula } from "@/lib/sheet-formula";
+import { COLUMN_RECIPES, snippetsFor } from "@/lib/sheet-snippets";
 
 const download = (name: string, text: string) => {
   const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
@@ -28,125 +13,172 @@ const download = (name: string, text: string) => {
   URL.revokeObjectURL(url);
 };
 
-/** 위험률 시트: 셀 직접 입력 · Excel 붙여넣기 · CSV/XLSX 업로드 · 기존 표 불러오기 */
-export function RateSheet() {
-  const { state: s, dispatch, current: c, result } = usePlan();
+const KIND_TONE: Record<RateKind, string> = {
+  death: "bg-navy/10 text-navy",
+  incidence: "bg-[#a34a1e]/10 text-[#a34a1e]",
+  recurring: "bg-sky/15 text-sky",
+  other: "bg-navy/5 text-navy/60",
+};
+
+/**
+ * 위험률 스프레드시트. A열은 연령(읽기 전용), B열부터 사용자 열.
+ * 칸에는 숫자나 `=수식`을 넣는다 — 수식은 Excel처럼 A1 참조를 쓰고, 고른 칸에 맞는 추천을 옆에 띄운다.
+ */
+export function RateSheetPanel() {
+  const { state: s, dispatch, sheet: res } = usePlan();
+  const sh = s.sheet;
+  const [sel, setSel] = useState<{ col: number; row: number }>({ col: 0, row: 0 });
+  const [draft, setDraft] = useState("");
   const [msg, setMsg] = useState("");
+  const [showTips, setShowTips] = useState(true);
   const file = useRef<HTMLInputElement>(null);
-  const g = c.grid;
-  const meta = kindMeta(c.kind);
-  const eventLabel = c.kind === "daily" ? "연간 기대 지급일수" : "급부 발생률";
-  const row = result.coverages.find((r) => r.id === c.id);
-  const cover = rateCoverage(g, s.age, Math.min(c.endAge, s.age + (row?.n ?? 1) - 1));
 
-  const setGrid = (grid: RateGrid, note = "") => { dispatch({ type: "coverage", id: c.id, patch: { grid, presetId: "custom" } }); setMsg(note); };
-  const setCell = (i: number, col: "event" | "exit", v: number) =>
-    setGrid({ ...g, [col]: g[col].map((x, j) => (j === i ? v : x)) });
+  const col = sh.columns[Math.min(sel.col, sh.columns.length - 1)];
+  const row = Math.min(sel.row, sh.ages.length - 1);
+  const raw = col?.cells[row] ?? "";
+  useEffect(() => { setDraft(raw); }, [raw, col?.id, row]);
 
-  const setRange = (from: number, to: number) => {
-    const lo = Math.max(0, Math.min(from, to)), hi = Math.min(120, Math.max(from, to));
-    const find = (a: number) => g.ages.indexOf(a);
-    const ages: number[] = [], event: number[] = [], exit: number[] = [];
-    for (let a = lo; a <= hi; a++) { const i = find(a); ages.push(a); event.push(i >= 0 ? g.event[i] : 0); exit.push(i >= 0 ? g.exit[i] : 0); }
-    setGrid({ ages, event, exit });
+  const commit = (value: string) => { if (col) dispatch({ type: "cell", colId: col.id, row, value }); };
+  const apply = (formula: string, fill?: boolean) => {
+    commit(formula);
+    if (fill && col) setTimeout(() => dispatch({ type: "fillDown", colId: col.id, row }), 0);
   };
 
   const onPaste = (e: ClipboardEvent<HTMLDivElement>) => {
     const text = e.clipboardData.getData("text");
-    if (!text.trim()) return;
+    if (!text.trim() || !text.includes("\n")) return;      // 한 칸 붙여넣기는 기본 동작에 맡긴다
     e.preventDefault();
     try {
-      const grid = parseRateText(text);
-      setGrid(grid, `붙여넣기: ${grid.ages.length}개 연령을 읽었습니다.`);
+      const t = parseRateText(text);
+      dispatch({ type: "pasteTable", ages: t.ages, columns: t.columns });
+      setMsg(`붙여넣기: ${t.ages.length}개 연령 × ${t.columns.length}개 열`);
     } catch (err) { setMsg(err instanceof Error ? err.message : "붙여넣기를 읽지 못했습니다."); }
   };
 
   const onFile = async (f: File) => {
     try {
-      const grid = await parseRateFile(f);
-      setGrid(grid, `${f.name}: ${grid.ages.length}개 연령을 읽었습니다.`);
+      const t = await parseRateFile(f);
+      dispatch({ type: "pasteTable", ages: t.ages, columns: t.columns });
+      setMsg(`${f.name}: ${t.ages.length}개 연령 × ${t.columns.length}개 열`);
     } catch (err) { setMsg(err instanceof Error ? err.message : "파일을 읽지 못했습니다."); }
   };
 
+  const err = col ? res.errors[row]?.[sel.col + 1] ?? null : null;
+  const tips = col ? snippetsFor({ sheet: sh, col, colIdx: sh.columns.indexOf(col), row }) : [];
+
   return (
-    <Card title={<span>위험률 시트 <span className="text-sm font-normal text-navy/50">{c.label} · {meta.label}</span></span>}>
-      <div className="flex flex-wrap items-end gap-3">
-        <Field label="연령 범위">
-          <div className="flex items-center gap-1">
-            <NumInput value={g.ages[0] ?? s.age} min={0} max={120} className="w-20" onCommit={(v) => setRange(Math.round(v), g.ages[g.ages.length - 1] ?? c.endAge)} />
-            <span className="text-sm text-navy/60">~</span>
-            <NumInput value={g.ages[g.ages.length - 1] ?? c.endAge} min={0} max={120} className="w-20" onCommit={(v) => setRange(g.ages[0] ?? s.age, Math.round(v))} />
-          </div>
-        </Field>
-        <div className="flex flex-wrap gap-2 pb-1">
-          <Button onClick={() => file.current?.click()}>CSV·Excel 업로드</Button>
-          <Button onClick={() => download(`위험률_${c.label}.csv`, rateCsv(g))}>CSV 내려받기</Button>
-          <input ref={file} type="file" accept=".csv,.xlsx,.xls" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
-        </div>
+    <Card title={<span className="flex flex-wrap items-baseline gap-2">위험률 시트<span className="text-sm font-normal text-navy/50">A열 연령 · B열부터 위험률 · 칸에 숫자나 =수식</span></span>}>
+      {/* 도구 모음 */}
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-navy/60">연령</span>
+        <div className="w-16"><NumInput value={sh.ages[0] ?? 0} min={0} max={120} onCommit={(v) => dispatch({ type: "ageRange", from: Math.round(v), to: sh.ages[sh.ages.length - 1] ?? 80 })} /></div>
+        <span className="text-navy/60">~</span>
+        <div className="w-16"><NumInput value={sh.ages[sh.ages.length - 1] ?? 0} min={0} max={120} onCommit={(v) => dispatch({ type: "ageRange", from: sh.ages[0] ?? 40, to: Math.round(v) })} /></div>
+        <Select className="w-auto" value="" onChange={(e) => { if (e.target.value) { dispatch({ type: "addColumn", presetId: e.target.value }); setMsg(`열 추가: ${RATE_PRESETS.find((p) => p.id === e.target.value)?.label ?? ""}`); } }}>
+          <option value="">＋ 열 추가 (기존 표)</option>
+          {RATE_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </Select>
+        <Button onClick={() => file.current?.click()}>업로드</Button>
+        <Button onClick={() => download(`위험률_${s.productName || "시트"}.csv`, rateCsv(sh, res))}>CSV</Button>
+        <input ref={file} type="file" accept=".csv,.xlsx,.xls" className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
       </div>
-      <p className="mt-2 text-xs text-navy/60">
-        표 안을 누르고 <b>Ctrl+V</b>로 Excel에서 그대로 붙여넣을 수 있습니다 — 1열 연령, 2열 {eventLabel}, 3열(선택) 탈퇴율.
-        담보 조건의 &quot;위험률 출처&quot;에서 기존 표를 불러온 뒤 고쳐 써도 됩니다.
-      </p>
+      <p className="mt-1 text-xs text-navy/55">표 안을 누르고 <b>Ctrl+V</b>로 Excel에서 여러 열을 한 번에 붙여넣을 수 있습니다 — 1열 연령, 2열부터 위험률(머리글 행은 열 이름으로 씁니다).</p>
       {msg && <p className="mt-1 text-xs text-sky">{msg}</p>}
-      {!cover.ok && (
-        <p className="mt-1 text-xs text-[#a34a1e]">
-          표가 {cover.min}~{cover.max}세만 덮습니다. 가입나이 {s.age}세 ~ 만기 {c.endAge}세 밖의 나이는 가장 가까운 연령 값을 이어 씁니다.
-        </p>
+
+      {/* 수식 입력줄 */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span className="rounded bg-navy/5 px-2 py-1 font-mono text-xs text-navy/70">{colLetter(sh.columns.indexOf(col) + 1)}{row + 1}</span>
+        <Input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => commit(draft)}
+          onKeyDown={(e) => { if (e.key === "Enter") { commit(draft); setSel({ col: sel.col, row: Math.min(row + 1, sh.ages.length - 1) }); } if (e.key === "Escape") setDraft(raw); }}
+          placeholder="숫자 또는 =수식 (예: =B3*0.65)" className="min-w-[220px] flex-1" />
+        <Button onClick={() => col && dispatch({ type: "fillDown", colId: col.id, row })} title="이 칸을 아래 끝까지 채웁니다 (상대 행 참조는 한 칸씩 밀립니다)">아래로 채우기</Button>
+        <Button onClick={() => setShowTips((v) => !v)}>{showTips ? "추천 숨기기" : "수식 추천"}</Button>
+      </div>
+      {err && <p className="mt-1 text-xs text-[#a34a1e]">{err} — {CELL_ERROR_KO[err]}</p>}
+
+      {showTips && (
+        <div className="mt-2 rounded border border-navy/10 bg-cream/60 p-2">
+          <p className="mb-1 text-xs font-medium text-navy/70">이 칸에 쓸 만한 수식</p>
+          <div className="flex flex-wrap gap-1.5">
+            {tips.map((t) => (
+              <button key={t.id} type="button" title={`${t.formula}\n\n${t.why}`} onClick={() => apply(t.formula, t.fill)}
+                className="rounded border border-navy/15 bg-white px-2 py-1 text-left text-[11px] text-navy/80 hover:border-sky hover:bg-sky/5">
+                <span className="font-medium">{t.label}</span>
+                <span className="ml-1 font-mono text-navy/45">{t.formula}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] text-navy/50">누르면 이 칸에 넣고 아래 끝까지 채웁니다. 상대 행 참조(<span className="font-mono">B2</span>)는 채울 때 한 칸씩 밀려 &quot;앞 값 이어받기&quot;가 됩니다. 쓸 수 있는 함수: IF · MIN · MAX · ABS · ROUND · SUM.</p>
+        </div>
       )}
 
-      <div onPaste={onPaste} tabIndex={0} className="mt-3 max-h-96 overflow-auto rounded border border-navy/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-sky">
-        <table className="w-full text-xs">
-          <thead className="sticky top-0 bg-cream text-navy/60">
+      {/* 열 머리 */}
+      <div className="mt-3 overflow-auto" onPaste={onPaste}>
+        <table className="w-full border-collapse text-xs">
+          <thead className="sticky top-0 z-10 bg-white">
             <tr>
-              <th className="px-2 py-1 text-left font-medium">연령</th>
-              <th className="px-2 py-1 text-right font-medium">{eventLabel}</th>
-              <th className="px-2 py-1 text-right font-medium">탈퇴율</th>
+              <th className="w-12 border border-navy/10 bg-cream px-1 py-1 text-left font-medium text-navy/50">A<div className="font-normal">연령</div></th>
+              {sh.columns.map((c, i) => (
+                <th key={c.id} className={`min-w-[130px] border border-navy/10 px-1 py-1 text-left align-top ${c.id === col?.id ? "bg-sky/10" : "bg-cream"}`}>
+                  <div className="flex items-center gap-1">
+                    <span className="font-mono text-[10px] text-navy/40">{colLetter(i + 1)}</span>
+                    <input value={c.name} onChange={(e) => dispatch({ type: "column", colId: c.id, patch: { name: e.target.value } })}
+                      className="w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-xs font-medium text-navy hover:border-navy/20 focus:border-sky focus:bg-white focus:outline-none" />
+                    <button type="button" onClick={() => dispatch({ type: "removeColumn", colId: c.id })} disabled={sh.columns.length <= 1}
+                      className="shrink-0 px-1 text-navy/40 hover:text-[#a34a1e] disabled:opacity-30" title="열 삭제">×</button>
+                  </div>
+                  <div className="mt-1 flex items-center gap-1">
+                    <select value={c.kind} onChange={(e) => dispatch({ type: "column", colId: c.id, patch: { kind: e.target.value as RateKind } })}
+                      title={RATE_KINDS.find((k) => k.kind === c.kind)?.hint}
+                      className={`rounded px-1 py-0.5 text-[10px] font-medium ${KIND_TONE[c.kind]}`}>
+                      {RATE_KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+                    </select>
+                    <label className="flex items-center gap-0.5 text-[10px] text-navy/60" title="이 열을 납입면제(납입자 집단 l′) 탈퇴율 f에 넣습니다">
+                      <input type="checkbox" className="accent-sky" checked={c.waiver} onChange={(e) => dispatch({ type: "column", colId: c.id, patch: { waiver: e.target.checked } })} />
+                      면제
+                    </label>
+                  </div>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {g.ages.map((a, i) => (
-              <tr key={a} className="border-t border-navy/5">
-                <td className="px-2 py-0.5 font-mono text-navy/70">{a}</td>
-                <td className="px-1 py-0.5">{c.kind === "survival" ? <span className="block text-right text-navy/30">—</span> : <Cell value={g.event[i] ?? 0} onCommit={(v) => setCell(i, "event", v)} />}</td>
-                <td className="px-1 py-0.5"><Cell value={g.exit[i] ?? 0} onCommit={(v) => setCell(i, "exit", v)} /></td>
+            {sh.ages.map((age, r) => (
+              <tr key={age}>
+                <td className="border border-navy/10 bg-cream/60 px-1 py-0.5 font-mono text-[11px] text-navy/60">{age}</td>
+                {sh.columns.map((c, i) => {
+                  const cellErr = res.errors[r]?.[i + 1] ?? null;
+                  const value = res.values[r]?.[i + 1] ?? 0;
+                  const input = c.cells[r] ?? "";
+                  const on = c.id === col?.id && r === row;
+                  return (
+                    <td key={c.id} onClick={() => setSel({ col: i, row: r })}
+                      className={`cursor-cell border px-1 py-0.5 text-right font-mono text-[11px] ${on ? "border-sky bg-sky/10" : "border-navy/10"} ${cellErr ? "bg-[#a34a1e]/10 text-[#a34a1e]" : isFormula(input) ? "text-sky" : "text-navy/80"}`}
+                      title={cellErr ? `${cellErr} — ${CELL_ERROR_KO[cellErr]}` : isFormula(input) ? `${input} → ${value}` : undefined}>
+                      {cellErr ?? (Math.round(value * 1e10) / 1e10)}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-navy/50">
-        탈퇴율 = 그 담보가 없어지는 사유 전부. {meta.label}은 {c.kind === "incidence" ? "사망률 + 발생률" : c.kind === "death" ? "사망률(= 발생률)" : c.kind === "daily" ? "사망률만(입원은 반복 지급이라 소멸하지 않음)" : "사망률"}입니다.
-        {c.kind === "survival" && " 생존형은 발생률을 쓰지 않고 지급 시점으로 정합니다."}
-      </p>
-      <p className="mt-1 text-xs text-navy/50">표를 고치거나 붙여넣으면 위험률 출처가 &quot;직접 입력&quot;으로 바뀝니다. 담보 조건에서 기존 표를 다시 고르면 덮어씁니다.</p>
-    </Card>
-  );
-}
 
-/** 텍스트로 한 번에 붙여넣기(표가 아주 클 때) */
-export function RatePasteBox() {
-  const { dispatch, current: c } = usePlan();
-  const [text, setText] = useState("");
-  const [msg, setMsg] = useState("");
-  const apply = () => {
-    try {
-      const grid = parseRateText(text);
-      dispatch({ type: "coverage", id: c.id, patch: { grid, presetId: "custom" } });
-      setMsg(`${grid.ages.length}개 연령을 읽었습니다.`); setText("");
-    } catch (err) { setMsg(err instanceof Error ? err.message : "읽지 못했습니다."); }
-  };
-  return (
-    <details className="rounded-lg border border-navy/10 bg-white p-4 shadow-sm">
-      <summary className="cursor-pointer text-sm text-navy">텍스트로 붙여넣기</summary>
-      <p className="mt-2 text-xs text-navy/60">Excel에서 복사한 내용을 그대로 붙여넣고 적용을 누르세요. 탭·쉼표·세미콜론 구분을 모두 읽습니다.</p>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} placeholder={"40\t0.00123\t0.00250\n41\t0.00131\t0.00268"}
-        className="mt-2 w-full rounded border border-navy/20 p-2 font-mono text-xs focus:border-sky focus:outline-none" />
-      <div className="mt-2 flex items-center gap-2">
-        <Button primary onClick={apply} disabled={!text.trim()}>적용</Button>
-        {msg && <span className="text-xs text-sky">{msg}</span>}
-      </div>
-    </details>
+      {/* 새 열 레시피 */}
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs text-navy/60">수식으로 새 열 만들기</summary>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {COLUMN_RECIPES.map((rec) => (
+            <button key={rec.id} type="button" title={rec.hint}
+              onClick={() => { dispatch({ type: "addRecipeColumn", recipeId: rec.id }); setSel({ col: sh.columns.length, row: 0 }); setMsg(`"${rec.label}" 열을 추가했습니다 — 수식이 채워졌습니다. 칸을 눌러 고쳐 쓰세요.`); }}
+              className="rounded border border-navy/15 bg-white px-2 py-1 text-left text-[11px] text-navy/80 hover:border-sky hover:bg-sky/5">
+              {rec.label}
+            </button>
+          ))}
+        </div>
+      </details>
+    </Card>
   );
 }

@@ -109,7 +109,7 @@ export const planTermYears = (age: number, coverages: PlanCoverage[]) =>
 function coverage(c: PlanCoverage, input: PlanInput, n: number, N: number): PlanCoverageResult {
   const { age, freq, expenses } = input;
   const m = Math.min(input.payYears, n);
-  const useEvent = c.kind === "death" ? undefined : c.event;   // 사망형은 급부 = 탈퇴
+  const useEvent = c.event.length ? c.event : undefined;   // 비면 급부 = 탈퇴(사망보장)
   const mult = Array.from({ length: n }, (_, t) => (c.kind === "survival" ? 0 : stepMultiple(c.steps, age + t)));
   const S = mult.map((v, t) => (t === 0 ? v * c.waitFactor : v));   // 산출용(면책 반영)
   const C = zeros(n + 1);

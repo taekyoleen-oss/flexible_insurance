@@ -3,27 +3,67 @@ import kli7 from "@/lib/engine/data/rates-kli7.json";
 import cancerRates from "@/lib/engine/data/rates-cancer.json";
 import cancerHosp from "@/lib/engine/data/rates-cancer-hosp.json";
 import type { RateTable, Sex } from "@/lib/engine";
-
-/** 위험률 시트: 연령 행 × (급부 발생률, 탈퇴율) 두 열. 담보마다 하나씩 가진다 */
-export interface RateGrid { ages: number[]; event: number[]; exit: number[] }
+import { colLetter, evaluateSheet, type CellError, type SheetValues } from "./sheet-formula";
 
 export const MAX_AGE = 120;
 const TABLE = kli7 as RateTable;
 const CANCER = cancerRates as RateTable;
 const HOSP = cancerHosp as { M: number[]; F: number[] };
 
-const num = (v: unknown): number | null => {
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  if (typeof v !== "string") return null;
-  const s = v.replace(/[,\s%]/g, "");
-  if (!s) return null;
-  const n = Number(s);
-  if (!Number.isFinite(n)) return null;
-  return v.includes("%") ? n / 100 : n;
-};
+/**
+ * 위험률 유형. 담보·납입면제와 어떻게 이어지는지를 이 값이 정한다.
+ * - death     사망: 모든 담보의 탈퇴에 들어가고, 사망형 담보의 급부가 된다
+ * - incidence 최초발생: 1회 지급 후 그 담보가 소멸 → 그 담보의 탈퇴에 들어간다
+ * - recurring 반복지급: 여러 번 지급(입원일당 등) → 담보를 소멸시키지 않는다
+ * - other     기타: 상수·계수·파생값. 납입면제율을 직접 만들 때 쓴다
+ */
+export type RateKind = "death" | "incidence" | "recurring" | "other";
+
+export const RATE_KINDS: { kind: RateKind; label: string; hint: string }[] = [
+  { kind: "death", label: "사망", hint: "모든 담보의 탈퇴에 들어가고, 사망형 담보의 급부가 됩니다" },
+  { kind: "incidence", label: "최초발생", hint: "1회 지급 후 그 담보가 소멸합니다 — 그 담보의 탈퇴에 들어갑니다" },
+  { kind: "recurring", label: "반복지급", hint: "여러 번 지급합니다(입원 1일당 등). 담보를 소멸시키지 않습니다" },
+  { kind: "other", label: "기타", hint: "상수·계수·파생값. 납입면제율을 다른 열에서 계산할 때 씁니다" },
+];
+export const kindLabel = (k: RateKind) => RATE_KINDS.find((x) => x.kind === k)?.label ?? k;
+
+/** 시트의 열 하나. cells[r]는 원본 입력(숫자 또는 `=수식`) */
+export interface RateColumn { id: string; name: string; kind: RateKind; waiver: boolean; cells: string[] }
+/** A열 = 연령(읽기 전용), B열부터 columns */
+export interface RateSheet { ages: number[]; columns: RateColumn[] }
+
+export const newColId = () => `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
+
+// ── 평가 ────────────────────────────────────────────────────────────────────
+export interface ResolvedSheet extends SheetValues { byId: Record<string, number[]>; errorCount: number }
+
+/** 시트를 계산해 열별 행 값을 돌려준다. A열(연령)은 values[r][0] */
+export function resolveSheet(s: RateSheet): ResolvedSheet {
+  const rows = s.ages.length, cols = s.columns.length + 1;
+  const res = evaluateSheet({
+    rows, cols,
+    raw: (r, c) => (c === 0 ? String(s.ages[r] ?? "") : s.columns[c - 1]?.cells[r] ?? ""),
+  });
+  const byId: Record<string, number[]> = {};
+  s.columns.forEach((col, i) => { byId[col.id] = res.values.map((row) => row[i + 1]); });
+  let errorCount = 0;
+  for (const row of res.errors) for (const e of row) if (e) errorCount++;
+  return { ...res, byId, errorCount };
+}
+
+/** 첫 오류 칸의 위치와 코드 (상태 배지·메시지용) */
+export function firstError(s: RateSheet, r: ResolvedSheet): { cell: string; code: CellError } | null {
+  for (let row = 0; row < r.errors.length; row++) {
+    for (let c = 0; c < r.errors[row].length; c++) {
+      const e = r.errors[row][c];
+      if (e) return { cell: `${colLetter(c)}${row + 1}`, code: e };
+    }
+  }
+  return null;
+}
 
 /**
- * 연령 행 → 연령 인덱스 배열. 표에 없는 나이는 바로 앞 나이 값을 그대로 쓴다(마지막 나이 뒤도 마지막 값).
+ * 행 값 → 연령 인덱스 배열. 표에 없는 나이는 바로 앞 나이 값을 그대로 쓴다(첫 나이 앞은 첫 값, 마지막 뒤는 마지막 값).
  * 표가 보험기간을 못 덮을 때 보험료가 조용히 0이 되는 것을 막는다 — 화면에는 rateCoverage()로 경고를 띄운다.
  */
 export function toAgeArray(ages: number[], values: number[]): number[] {
@@ -38,71 +78,126 @@ export function toAgeArray(ages: number[], values: number[]): number[] {
   return out;
 }
 
-/** 표가 가입나이~만기를 덮는지. 덮지 못하면 화면에 경고를 띄운다 */
-export function rateCoverage(g: RateGrid, age: number, endAge: number): { ok: boolean; min: number; max: number } {
-  if (g.ages.length === 0) return { ok: false, min: 0, max: 0 };
-  const min = Math.min(...g.ages), max = Math.max(...g.ages);
+/** 여러 열을 더한 연령 인덱스 배열(탈퇴율·납입면제율은 열의 합) */
+export function sumColumns(s: RateSheet, r: ResolvedSheet, ids: string[]): number[] {
+  const out = new Array<number>(MAX_AGE + 1).fill(0);
+  for (const id of ids) {
+    const vals = r.byId[id];
+    if (!vals) continue;
+    const arr = toAgeArray(s.ages, vals);
+    for (let a = 0; a <= MAX_AGE; a++) out[a] += arr[a];
+  }
+  return out;
+}
+
+/** 한 열의 연령 인덱스 배열 */
+export const columnArray = (s: RateSheet, r: ResolvedSheet, id: string) =>
+  r.byId[id] ? toAgeArray(s.ages, r.byId[id]) : new Array<number>(MAX_AGE + 1).fill(0);
+
+/** 표가 가입나이~만기를 덮는지 */
+export function rateCoverage(s: RateSheet, age: number, endAge: number): { ok: boolean; min: number; max: number } {
+  if (s.ages.length === 0) return { ok: false, min: 0, max: 0 };
+  const min = Math.min(...s.ages), max = Math.max(...s.ages);
   return { ok: min <= age && max >= endAge, min, max };
 }
 
-/** Excel에서 복사한 TSV, CSV 텍스트 → 시트. 열이 2개면 [연령, 발생률], 3개 이상이면 [연령, 발생률, 탈퇴율] */
-export function parseRateText(text: string): RateGrid {
+/** 사망 열 id 목록 — 담보 탈퇴의 기본값 */
+export const deathCols = (s: RateSheet) => s.columns.filter((c) => c.kind === "death").map((c) => c.id);
+/** 납입면제 열 id 목록 */
+export const waiverCols = (s: RateSheet) => s.columns.filter((c) => c.waiver).map((c) => c.id);
+
+// ── 붙여넣기·파일 ────────────────────────────────────────────────────────────
+const num = (v: unknown): number | null => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v !== "string") return null;
+  const s = v.replace(/[,\s%]/g, "");
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return v.includes("%") ? n / 100 : n;
+};
+
+export interface ParsedTable { ages: number[]; columns: { name: string; cells: string[] }[] }
+
+/** Excel에서 복사한 TSV·CSV 텍스트 → 표. 1열 연령, 2열부터 위험률(열 개수 제한 없음) */
+export function parseRateText(text: string): ParsedTable {
   const rows = text.split(/\r?\n/).map((l) => l.split(/\t|,|;/)).filter((r) => r.some((c) => c.trim() !== ""));
   return parseRows(rows);
 }
 
-/** CSV·XLSX 파일 → 시트. 첫 시트의 첫 3열만 본다 */
-export async function parseRateFile(file: File): Promise<RateGrid> {
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array" });
+/** CSV·XLSX 파일 → 표. 첫 시트를 읽는다 */
+export async function parseRateFile(file: File): Promise<ParsedTable> {
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) throw new Error("시트를 찾을 수 없습니다");
   return parseRows(XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, blankrows: false }));
 }
 
-function parseRows(rows: unknown[][]): RateGrid {
-  const ages: number[] = [], event: number[] = [], exit: number[] = [];
+function parseRows(rows: unknown[][]): ParsedTable {
+  const header = rows.find((r) => num(r[0]) === null && r.some((c) => String(c ?? "").trim() !== ""));
+  const width = Math.max(1, ...rows.map((r) => r.length));
+  const ages: number[] = [], cols: string[][] = Array.from({ length: width - 1 }, () => []);
   for (const r of rows) {
-    const a = num(r[0]), e = num(r[1]);
-    if (a === null || e === null) continue;            // 머리글·빈 줄은 건너뛴다
-    if (a < 0 || a > MAX_AGE) continue;
-    ages.push(Math.round(a)); event.push(e); exit.push(num(r[2]) ?? 0);
+    const a = num(r[0]);
+    if (a === null || a < 0 || a > MAX_AGE) continue;       // 머리글·빈 줄은 건너뛴다
+    ages.push(Math.round(a));
+    for (let c = 1; c < width; c++) cols[c - 1].push(String(num(r[c]) ?? 0));
   }
-  if (ages.length === 0) throw new Error("연령과 위험률 두 열을 읽지 못했습니다. 1열 연령, 2열 급부 발생률, 3열(선택) 탈퇴율 순서로 넣어 주세요.");
-  return { ages, event, exit };
+  if (ages.length === 0) throw new Error("연령 열을 읽지 못했습니다. 1열에 연령, 2열부터 위험률을 넣어 주세요.");
+  const named = cols.map((cells, i) => ({ name: String(header?.[i + 1] ?? "").trim() || `위험률 ${i + 1}`, cells }));
+  return { ages, columns: named.length ? named : [{ name: "위험률 1", cells: ages.map(() => "0") }] };
 }
 
-/** 시트 → CSV(Excel에서 바로 열리도록 BOM) */
-export const rateCsv = (g: RateGrid) =>
-  "﻿" + ["연령,급부 발생률,탈퇴율", ...g.ages.map((a, i) => `${a},${g.event[i] ?? 0},${g.exit[i] ?? 0}`)].join("\r\n");
+/** 시트 → CSV(Excel에서 바로 열리도록 BOM). 수식이 아니라 계산된 값을 내보낸다 */
+export function rateCsv(s: RateSheet, r: ResolvedSheet): string {
+  const head = ["연령", ...s.columns.map((c) => `${c.name} (${kindLabel(c.kind)}${c.waiver ? "·납입면제" : ""})`)];
+  const lines = s.ages.map((a, i) => [a, ...s.columns.map((c) => r.byId[c.id]?.[i] ?? 0)].join(","));
+  return "﻿" + [head.join(","), ...lines].join("\r\n");
+}
 
-export interface RatePreset { id: string; label: string; note: string; build: (sex: Sex, from: number, to: number) => RateGrid }
-
+// ── 기존 표 불러오기 ─────────────────────────────────────────────────────────
 const at = (arr: number[], i: number) => arr[i] ?? arr[arr.length - 1] ?? 0;
-/** 표에 넣는 값은 10자리에서 끊는다 — 0.65를 곱한 뒤 0.0015500999999999999 같은 부동소수 찌꺼기가 칸에 보이지 않게 */
+/** 표에 넣는 값은 10자리에서 끊는다 — 0.65를 곱한 뒤 0.0015500999999999999 같은 찌꺼기가 칸에 보이지 않게 */
 export const roundRate = (x: number) => Math.round(x * 1e10) / 1e10;
-const grid = (from: number, to: number, ev: (a: number) => number, ex: (a: number) => number): RateGrid => {
-  const ages: number[] = [], event: number[] = [], exit: number[] = [];
-  for (let a = from; a <= to; a++) { ages.push(a); event.push(roundRate(ev(a))); exit.push(roundRate(ex(a))); }
-  return { ages, event, exit };
-};
 
-/** 기존 산출에 쓰는 표를 그대로 불러온다 — 설계형 상품과 같은 위험률로 일반 상품을 만들 수 있다 */
+export interface RatePreset { id: string; label: string; kind: RateKind; waiver: boolean; note: string; values: (sex: Sex, ages: number[]) => number[] }
+
+/** 기존 산출에 쓰는 표를 열로 불러온다 — 설계형 상품과 같은 위험률로 일반 상품을 만들 수 있다 */
 export const RATE_PRESETS: RatePreset[] = [
-  { id: "kli7", label: "제7회 경험생명표 사망률", note: "사망형 담보용. 발생률 = 탈퇴율 = q",
-    build: (s, f, t) => grid(f, t, (a) => at(TABLE[s].q, a), (a) => at(TABLE[s].q, a)) },
-  { id: "kli7Std", label: "제7회 표준사망률", note: "표준책임준비금 기준 사망률 q_std",
-    build: (s, f, t) => grid(f, t, (a) => at(TABLE[s].qStd, a), (a) => at(TABLE[s].qStd, a)) },
-  { id: "cancer", label: "암발생률 (생명장기제2024-112호)", note: "진단형. 탈퇴율 = 사망률 + 발생률",
-    build: (s, f, t) => grid(f, t, (a) => at(CANCER[s].q, a), (a) => at(CANCER[s].q, a) + at(TABLE[s].q, a)) },
-  { id: "cancerHosp", label: "암입원 연간 기대일수 (암입원율 × 365)", note: "일당형. 탈퇴율 = 사망률",
-    build: (s, f, t) => grid(f, t, (a) => at(HOSP[s], a) * 365, (a) => at(TABLE[s].q, a)) },
-  { id: "twoMajor", label: "2대질병 발생률 (사망률 × 0.65, 임시)", note: "뇌출혈 0.35 + 급성심근경색 0.30. 회사 요율로 교체하세요",
-    build: (s, f, t) => grid(f, t, (a) => at(TABLE[s].q, a) * 0.65, (a) => at(TABLE[s].q, a) * 1.65) },
-  { id: "zero", label: "빈 표 (직접 입력)", note: "연령만 채우고 위험률은 0",
-    build: (_s, f, t) => grid(f, t, () => 0, () => 0) },
+  { id: "kli7", label: "제7회 경험생명표 사망률 q", kind: "death", waiver: false, note: "설계형 종신보험과 같은 표",
+    values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].q, a))) },
+  { id: "kli7Std", label: "제7회 표준사망률 q_std", kind: "death", waiver: false, note: "표준책임준비금 기준",
+    values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].qStd, a))) },
+  { id: "waiver", label: "납입면제 발생률 f (장해 50% 이상)", kind: "other", waiver: true, note: "제7회 경험생명표. 납입면제 열로 들어갑니다",
+    values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].f, a))) },
+  { id: "cancer", label: "암발생률 (생명장기제2024-112호)", kind: "incidence", waiver: false, note: "제공받은 실제 값",
+    values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a))) },
+  { id: "cancerHosp", label: "암입원 연간 기대일수 (암입원율 × 365)", kind: "recurring", waiver: false, note: "제공받은 실제 값. 일당형 담보용",
+    values: (s, ages) => ages.map((a) => roundRate(at(HOSP[s], a) * 365)) },
+  { id: "twoMajor", label: "2대질병 발생률 (사망률 × 0.65, 임시)", kind: "incidence", waiver: false, note: "뇌출혈 0.35 + 급성심근경색 0.30. 회사 요율로 교체하세요",
+    values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].q, a) * 0.65)) },
+  { id: "blank", label: "빈 열 (직접 입력·수식)", kind: "other", waiver: false, note: "0으로 채우고 셀에 값이나 수식을 넣습니다",
+    values: (_s, ages) => ages.map(() => 0) },
 ];
 
-/** 납입면제 발생률(장해 50% 이상). 계약 단위라 담보 시트와 따로 둔다 */
-export const waiverRates = (sex: Sex) => TABLE[sex].f;
-export const WAIVER_NOTE = "제7회 경험생명표 납입면제(장해 50% 이상) 발생률 f";
+export function presetColumn(p: RatePreset, sex: Sex, ages: number[]): RateColumn {
+  return { id: newColId(), name: p.label.replace(/\s*\(.*\)$/, ""), kind: p.kind, waiver: p.waiver, cells: p.values(sex, ages).map(String) };
+}
+
+/** 첫 화면 기본 시트: 사망률 + 납입면제율 + 2대질병 발생률 */
+export function defaultSheet(sex: Sex, from: number, to: number): RateSheet {
+  const ages = Array.from({ length: Math.max(1, to - from + 1) }, (_, i) => from + i);
+  const pick = (id: string) => presetColumn(RATE_PRESETS.find((p) => p.id === id)!, sex, ages);
+  return { ages, columns: [pick("kli7"), pick("waiver"), pick("twoMajor")] };
+}
+
+/** 연령 범위를 바꾼다. 이미 있는 나이의 입력(수식 포함)은 그대로 옮긴다 */
+export function setAgeRange(s: RateSheet, from: number, to: number): RateSheet {
+  const lo = Math.max(0, Math.min(from, to)), hi = Math.min(MAX_AGE, Math.max(from, to));
+  const ages = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  const index = new Map(s.ages.map((a, i) => [a, i]));
+  return {
+    ages,
+    columns: s.columns.map((c) => ({ ...c, cells: ages.map((a) => { const i = index.get(a); return i === undefined ? "0" : c.cells[i] ?? "0"; }) })),
+  };
+}

@@ -1,13 +1,15 @@
 "use client";
 import { createContext, useContext, useEffect, useMemo, useReducer, useState, type Dispatch, type ReactNode } from "react";
 import type { PlanResult } from "@/lib/engine";
-import { evaluatePlan, initialPlan, planReducer, PLAN_STORAGE_KEY, sanitizePlan, selectedCoverage, type PlanAction, type PlanCoverageState, type PlanState } from "@/lib/plan-state";
+import type { ResolvedSheet } from "@/lib/plan-rates";
+import { evaluatePlan, initialPlan, planReducer, planSteps, PLAN_STORAGE_KEY, sanitizePlan, type PlanAction, type PlanState, type PlanStepCard } from "@/lib/plan-state";
 
 export interface PlanCtx {
   state: PlanState;
   dispatch: Dispatch<PlanAction>;
   result: PlanResult;
-  current: PlanCoverageState;
+  sheet: ResolvedSheet;      // 시트 평가 결과(값·오류)
+  steps: PlanStepCard[];
   loaded: boolean;
 }
 
@@ -30,9 +32,10 @@ export function PlanProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify(state)); } catch { /* 저장 불가 환경은 무시 */ }
   }, [state, loaded]);
 
-  const value = useMemo<PlanCtx>(() => ({
-    state, dispatch, result: evaluatePlan(state), current: selectedCoverage(state)!, loaded,
-  }), [state, loaded]);
+  const value = useMemo<PlanCtx>(() => {
+    const { result, sheet } = evaluatePlan(state);
+    return { state, dispatch, result, sheet, steps: planSteps(state, result, sheet), loaded };
+  }, [state, loaded]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
