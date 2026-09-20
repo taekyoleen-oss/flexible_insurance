@@ -5,7 +5,7 @@
  * ("deflate-raw")으로 풀고, HWP(OLE2 복합문서)는 직접 읽는다. XLSX 만 호출부가 파서를 넘긴다
  * (이 저장소는 SheetJS 가 이미 있어서 adapter 에서 주입한다).
  *
- * 지원: .docx  .hwpx  .hwp(5.x, DRM 없음)  .txt/.md/.csv  · XLSX 는 주입형
+ * 지원: .docx  .hwpx  .hwp(5.x, DRM 없음)  .pdf(텍스트 레이어)  .txt/.md/.csv  · XLSX 는 주입형
  * 못 읽는 것: DRM 걸린 파일, 텍스트 레이어 없는 스캔 PDF, 구형 HWP 3.0 — 모두 why 로 이유를 돌려준다
  */
 
@@ -246,7 +246,11 @@ export async function extractDoc(name: string, buf: Uint8Array, sheetReader?: Sh
   const drm = drmSignature(buf);
   if (drm) throw new ExtractError(`사내 DRM(${drm})이 걸린 파일입니다. 해제본으로 올려 주세요.`, "drm");
   const ext = (name.split(".").pop() ?? "").toLowerCase();
-  if (ext === "pdf") throw new ExtractError("PDF 는 아직 지원하지 않습니다. DOCX·HWP·HWPX·XLSX 로 저장해 올려 주세요.", "unsupported");
+  if (ext === "pdf") {
+    // pdfjs 는 무거워 이 경로에서만 동적 import 한다
+    const { extractPdf } = await import("./pdf");
+    return extractPdf(buf);
+  }
   if (ext === "docx") return extractDocx(buf);
   if (ext === "hwpx") return extractHwpx(buf);
   if (ext === "hwp") {

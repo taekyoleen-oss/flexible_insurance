@@ -140,18 +140,23 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     readBasisTable(t, ti, add, spec);
   });
 
-  // 2) 본문 규칙
+  // 2) 본문 규칙. 산출방법서는 "가. 적용이율" 다음 줄에 값이 오는 일이 잦아 바로 위 제목을 함께 본다
+  let heading = "";
   doc.paragraphs.forEach((line, li) => {
+    if (isHeading(line)) heading = line;
+    const withHead = heading && heading !== line ? `${heading} ${line}` : line;
     for (const r of FIELD_RULES) {
-      if (!r.words.test(line)) continue;
-      if (r.not?.test(line)) continue;
+      // 값은 항상 이 줄에서만 읽는다(제목에서 숫자를 주워 오지 않게)
       const m = r.value.exec(line);
       if (!m) continue;
+      const scope = r.words.test(line) ? line : r.words.test(withHead) ? withHead : null;
+      if (!scope || r.not?.test(scope)) continue;
       const v = r.kind === "rate" ? parseRate(`${m[1]}%`) : Math.round(n(m[1]));
       if (v === null || !Number.isFinite(v)) continue;
-      add(r.path === "benefits.waitDays" ? "surrender.waitDays" : r.path, r.label, v, line, `본문 ${li + 1}줄`, "medium");
+      add(r.path === "benefits.waitDays" ? "surrender.waitDays" : r.path, r.label, v,
+        scope === line ? line : `${heading} / ${line}`, `본문 ${li + 1}줄`, "medium");
     }
-    readLapse(line, li, spec, add);
+    readLapse(withHead, li, spec, add);
   });
 
   // 3) 위험률 — "○ …률" 목록과 "…를 사용함" 문구
@@ -231,20 +236,24 @@ function readExpenseTable(t: DocTable, ti: number, spec: MethodSpec, add: Add) {
   }
 }
 
-/** 기초율 표 — "이율 | - 연 2.5% 복리", "해지율 | 1종 … 연 4.0%" 같은 줄 */
+/**
+ * 기초율 표. 행을 한 줄로 이어 붙여 본문 사전(FIELD_RULES)을 그대로 돌린다 —
+ * "이율 | - 연 2.5% 복리" 처럼 이름과 값이 다른 칸에 있어도 잡히고, PDF 처럼 표가 줄로 풀려도 같은 규칙이 쓰인다.
+ * 표 값은 본문보다 믿을 만하므로 confidence "high", 그리고 표를 먼저 훑어 본문 값이 덮지 않게 한다.
+ */
 function readBasisTable(t: DocTable, ti: number, add: Add, spec: MethodSpec) {
-  for (const row of t.rows) {
-    const cells = row.map((c) => c.replace(/\s+/g, " ").trim());
-    const key = cells.find((c) => /^(이율|위험률|해지율|사업비)$/.test(c));
-    if (!key) continue;
-    const body = cells[cells.length - 1];
-    if (!body) continue;
-    if (key === "이율") {
-      const m = new RegExp(`연\\s*${NUM}\\s*%`).exec(body);
-      if (m) add("basis.interest", "적용이율", n(m[1]) / 100, body.slice(0, 120), `표 ${ti + 1}`, "high");
-    } else if (key === "해지율") {
-      readLapse(body, -1, spec, add, `표 ${ti + 1}`, "high");
+  for (const row of [t.head, ...t.rows]) {
+    const line = row.map((c) => c.replace(/\s+/g, " ").trim()).filter(Boolean).join(" ");
+    if (!line || line.length > 600) continue;
+    for (const r of FIELD_RULES) {
+      if (!r.words.test(line) || r.not?.test(line)) continue;
+      const m = r.value.exec(line);
+      if (!m) continue;
+      const v = r.kind === "rate" ? parseRate(`${m[1]}%`) : Math.round(n(m[1]));
+      if (v === null || !Number.isFinite(v)) continue;
+      add(r.path === "benefits.waitDays" ? "surrender.waitDays" : r.path, r.label, v, line.slice(0, 160), `표 ${ti + 1}`, "high");
     }
+    readLapse(line, -1, spec, add, `표 ${ti + 1}`, "high");
   }
 }
 
@@ -271,6 +280,10 @@ function readLapse(line: string, li: number, spec: MethodSpec, add: Add, source?
     add("basis.lapse", "적용해지율", "적용하지 않음", line.slice(0, 160), src, conf, false);
   }
 }
+
+/** 번호 붙은 제목 줄인지 — "1.", "1.1.", "가.", "(1)", "○", "◦" */
+export const isHeading = (s: string) =>
+  s.length < 60 && /^(\d+(\.\d+)*\.|[가-힣]\.|\(\d+\)|[○◦▪·])\s*\S/.test(s.trim());
 
 /** "1. …", "가. …", "(1) …" 번호 체계로 원문 절을 나눠 보존한다 */
 export function outlineSections(doc: ExtractedDoc) {

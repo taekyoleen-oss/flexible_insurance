@@ -16,6 +16,11 @@ const TONE: Record<Confidence, string> = {
 };
 const CONF_LABEL: Record<Confidence, string> = { high: "표에서 직접", medium: "본문 규칙", low: "AI 추정" };
 
+/** 폴더·여러 파일을 한 번에 올렸을 때의 목록 */
+interface QueueItem { name: string; size: number; status: "대기" | "읽는 중" | "완료" | "실패"; doc?: ExtractedDoc; res?: ParseResult; error?: string }
+
+const READABLE = /\.(docx|hwpx?|pdf|xlsx?|csv|txt|md)$/i;
+
 /** SheetJS 를 extract 에 주입한다 — methoddoc 모듈 자체는 엑셀 파서를 모른다 */
 const sheetReader: SheetReader = (buf) => {
   const wb = XLSX.read(buf, { type: "array" });
@@ -52,7 +57,9 @@ export default function MethodPage() {
   const [llmOn, setLlmOn] = useState(false);
   const [llmReady, setLlmReady] = useState<boolean | null>(null);
   const [tab, setTab] = useState<"review" | "doc" | "source">("review");
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const file = useRef<HTMLInputElement>(null);
+  const folder = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch("/api/method-llm").then((r) => r.json()).then((d: { available: boolean }) => setLlmReady(d.available)).catch(() => setLlmReady(false));
@@ -65,20 +72,41 @@ export default function MethodPage() {
     return d.answers ?? {};
   };
 
-  const onFile = async (f: File) => {
-    setErr(null); setRes(null); setDoc(null); setBusy("읽는 중…"); setFileName(f.name);
-    try {
-      const d = await extractDoc(f.name, new Uint8Array(await f.arrayBuffer()), sheetReader);
-      setDoc(d);
-      setBusy("항목 뽑는 중…");
-      let r = parseMethodDoc(d, { fallbackName: f.name.replace(/\.[^.]+$/, "") });
-      if (llmOn && llmReady) { setBusy("AI 보조로 빈 항목 채우는 중…"); r = await fillWithLlm(r, d, ask); }
-      setRes(r);
-      setAccepted(new Set(r.evidence.filter((e) => e.confidence !== "low").map((e) => e.path)));
-      setTab("review");
-    } catch (e) {
-      setErr(e instanceof ExtractError ? { msg: e.message, why: e.why } : { msg: e instanceof Error ? e.message : String(e) });
-    } finally { setBusy(""); }
+  /** 파일 하나를 읽고 항목을 뽑는다 */
+  const readOne = async (f: File): Promise<{ doc: ExtractedDoc; res: ParseResult }> => {
+    const d = await extractDoc(f.name, new Uint8Array(await f.arrayBuffer()), sheetReader);
+    let r = parseMethodDoc(d, { fallbackName: f.name.replace(/\.[^.]+$/, "") });
+    if (llmOn && llmReady) r = await fillWithLlm(r, d, ask);
+    return { doc: d, res: r };
+  };
+
+  const show = (name: string, d: ExtractedDoc, r: ParseResult) => {
+    setFileName(name); setDoc(d); setRes(r); setErr(null);
+    setAccepted(new Set(r.evidence.filter((e) => e.confidence !== "low").map((e) => e.path)));
+    setTab("review");
+  };
+
+  /** 폴더·여러 파일을 차례로 읽는다. 하나가 실패해도 나머지는 계속 */
+  const onFiles = async (files: File[]) => {
+    const list = files.filter((f) => READABLE.test(f.name)).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    if (!list.length) { setErr({ msg: "읽을 수 있는 파일이 없습니다 (DOCX·HWP·HWPX·PDF·XLSX·CSV·TXT)." }); return; }
+    setErr(null); setRes(null); setDoc(null);
+    setQueue(list.map((f) => ({ name: f.name, size: f.size, status: "대기" })));
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setBusy(`${i + 1}/${list.length} ${f.name}`);
+      setQueue((q) => q.map((x, j) => (j === i ? { ...x, status: "읽는 중" } : x)));
+      try {
+        const { doc: d, res: r } = await readOne(f);
+        setQueue((q) => q.map((x, j) => (j === i ? { ...x, status: "완료", doc: d, res: r } : x)));
+        if (i === 0) show(f.name, d, r);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setQueue((q) => q.map((x, j) => (j === i ? { ...x, status: "실패", error: msg } : x)));
+        if (list.length === 1) setErr(e instanceof ExtractError ? { msg, why: e.why } : { msg });
+      }
+    }
+    setBusy("");
   };
 
   const download = (name: string, body: string, type: string) => {
@@ -108,9 +136,12 @@ export default function MethodPage() {
       <Card title="① 산출방법서 읽기 → 입력 조건">
         <div className="flex flex-wrap items-center gap-2">
           <Button primary onClick={() => file.current?.click()} disabled={!!busy}>{busy || "파일 고르기"}</Button>
-          <input ref={file} type="file" accept=".docx,.hwp,.hwpx,.xlsx,.xls,.csv,.txt,.md" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ""; }} />
-          <span className="text-xs text-navy/55">DOCX · HWP(5.x) · HWPX · XLSX · CSV · TXT</span>
+          <Button onClick={() => folder.current?.click()} disabled={!!busy}>폴더 고르기</Button>
+          <input ref={file} type="file" multiple accept=".docx,.hwp,.hwpx,.pdf,.xlsx,.xls,.csv,.txt,.md" className="hidden"
+            onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) void onFiles(fs); e.target.value = ""; }} />
+          <input ref={folder} type="file" className="hidden" {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+            onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) void onFiles(fs); e.target.value = ""; }} />
+          <span className="text-xs text-navy/55">DOCX · HWP(5.x) · HWPX · <b>PDF</b> · XLSX · CSV · TXT — 여러 개·폴더째 가능</span>
           <label className="ml-auto flex items-center gap-1.5 text-sm" title={llmReady === false ? "서버에 ANTHROPIC_API_KEY 가 없어 꺼져 있습니다" : "규칙이 못 찾은 항목만 문단 발췌로 물어봅니다"}>
             <input type="checkbox" className="accent-sky" checked={llmOn} disabled={!llmReady} onChange={(e) => setLlmOn(e.target.checked)} />
             AI 보조 {llmReady === false && <span className="text-navy/40">(미설정)</span>}
@@ -118,7 +149,7 @@ export default function MethodPage() {
         </div>
         <p className="mt-1 text-xs text-navy/50">
           규칙(표 → 본문)만으로 먼저 뽑고, AI 보조를 켜면 빈 항목만 문단 발췌로 물어봅니다. AI가 채운 값은 빨간 뱃지로 표시되며 기본적으로 적용하지 않습니다.
-          DRM이 걸린 파일·스캔 PDF는 읽을 수 없어 이유를 알려 드립니다.
+          HWP 는 한글에서 PDF 로 저장해 올려도 됩니다 — 같은 결과가 나옵니다. DRM이 걸린 파일·스캔 PDF(글자 없는 이미지)는 읽을 수 없어 이유를 알려 드립니다.
         </p>
         {err && (
           <p className="mt-2 rounded bg-[#fee2e2] px-3 py-2 text-sm text-[#991b1b]">
@@ -132,6 +163,20 @@ export default function MethodPage() {
             <b>{fileName}</b> · {doc.kind.toUpperCase()} · 문단 {doc.paragraphs.length}개 · 표 {doc.tables.length}개
             {res && <> · 뽑은 항목 {res.evidence.length}개{res.missing.length > 0 && <span className="text-[#a34a1e]"> · 못 찾음 {res.missing.join(", ")}</span>}</>}
           </p>
+        )}
+        {queue.length > 1 && (
+          <ul className="mt-2 max-h-56 divide-y divide-navy/10 overflow-auto rounded border border-navy/10">
+            {queue.map((q, i) => (
+              <li key={i} className="flex items-center gap-2 px-2 py-1 text-xs">
+                <span className={`w-12 shrink-0 rounded px-1 text-center ${q.status === "완료" ? "bg-sky/15 text-sky" : q.status === "실패" ? "bg-[#fee2e2] text-[#991b1b]" : "bg-navy/5 text-navy/50"}`}>{q.status}</span>
+                <button type="button" disabled={!q.res} onClick={() => q.doc && q.res && show(q.name, q.doc, q.res)}
+                  className="flex-1 truncate text-left text-navy/80 enabled:hover:text-sky disabled:text-navy/40">{q.name}</button>
+                <span className="shrink-0 text-navy/45">
+                  {q.res ? `항목 ${q.res.evidence.length}개` : q.error ? q.error.slice(0, 60) : `${Math.round(q.size / 1024)}KB`}
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
         {(doc?.warnings.length || res?.warnings.length) ? (
           <ul className="mt-1 space-y-0.5 text-xs text-[#92400e]">
@@ -241,7 +286,7 @@ export default function MethodPage() {
       <Card title="이 기능의 한계 (알고 쓰세요)">
         <ul className="space-y-1 text-xs text-navy/60">
           <li>· <b>수식은 뽑지 않습니다.</b> 산출방법서의 수식은 HWP 수식객체·이미지라 텍스트로 나오지 않습니다. 기호·산식은 앱 쪽 정의를 씁니다.</li>
-          <li>· <b>DRM·스캔 PDF는 못 읽습니다.</b> 해제본을 DOCX·HWPX 로 저장해 올려 주세요.</li>
+          <li>· <b>DRM·스캔 PDF는 못 읽습니다.</b> 해제본을 DOCX·HWPX·PDF(글자가 살아 있는 것) 로 저장해 올려 주세요. 한글의 &quot;PDF로 저장&quot;은 글자가 남습니다.</li>
           <li>· <b>자동 적용하지 않습니다.</b> 항상 검수에서 고른 것만 반영합니다. AI가 채운 값은 기본 해제 상태입니다.</li>
           <li>· 위험률 <b>표</b>는 별첨 엑셀을 시트에 직접 붙여넣는 쪽이 정확합니다. 본문에서는 계열 이름·근거 문구만 가져옵니다.</li>
           <li>· 회사마다 표기가 달라 사전({LLM_FIELDS.length}개 항목)을 늘려 가며 적중률을 올립니다. 안 잡히는 표기를 알려 주시면 사전에 넣겠습니다.</li>

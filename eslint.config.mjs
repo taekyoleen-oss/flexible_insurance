@@ -18,6 +18,7 @@ const eslintConfig = [
       "out/**",
       "build/**",
       "next-env.d.ts",
+      "public/**",          // pdfjs 워커 등 빌드 시 복사되는 파일
     ],
   },
 ];

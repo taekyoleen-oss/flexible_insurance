@@ -43,8 +43,11 @@ describe("텍스트 추출", () => {
     expect(drmSignature(new TextEncoder().encode("<DOCUMENT SAFER V2010 R2>abc"))).toBe("<DOCUMENT SAFER V2010 R2>");
     expect(drmSignature(new TextEncoder().encode("PK\u0003\u0004"))).toBe(null);
   });
-  it("PDF 는 이유를 알려주고 멈춘다", async () => {
-    await expect(extractDoc("a.pdf", new Uint8Array([0x25, 0x50, 0x44, 0x46]))).rejects.toMatchObject({ why: "unsupported" });
+  it("깨진 PDF 는 이유를 알려주고 멈춘다", async () => {
+    await expect(extractDoc("a.pdf", new Uint8Array([0x25, 0x50, 0x44, 0x46]))).rejects.toMatchObject({ why: "corrupt" });
+  }, 30000);
+  it("구형 HWP 는 지원하지 않는다고 알려준다", async () => {
+    await expect(extractDoc("a.hwp", new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))).rejects.toMatchObject({ why: "unsupported" });
   });
   it.runIf(has(DRM_HWP))("DRM 파일은 why=drm 으로 막는다", async () => {
     await expect(extractDoc("x.hwp", read(DRM_HWP))).rejects.toMatchObject({ why: "drm" });

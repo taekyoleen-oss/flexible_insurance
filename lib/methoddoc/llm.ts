@@ -33,7 +33,7 @@ export interface LlmRequest {
   excerpts: { text: string; where: string }[];
 }
 /** 호출자가 넘기는 함수. path → 값 (못 찾으면 그 키를 빼면 된다) */
-export type LlmAsk = (req: LlmRequest) => Promise<Record<string, string | number | boolean>>;
+export type LlmAsk = (req: LlmRequest) => Promise<Record<string, unknown>>;
 
 /** 필드 이름과 관계있어 보이는 문단만 고른다 */
 export function excerptsFor(doc: ExtractedDoc, fields: LlmField[], limit = 24): LlmRequest["excerpts"] {
@@ -60,7 +60,19 @@ const setPath = (obj: Record<string, unknown>, path: string, value: unknown) => 
   for (let i = 0; i < parts.length - 1; i++) cur = (cur[parts[i]] ??= {}) as Record<string, unknown>;
   cur[parts[parts.length - 1]] = value;
 };
-const coerce = (kind: LlmField["kind"], v: unknown): string | number | boolean | null => {
+/** 모델이 {"rate":0.025}·{"value":20} 처럼 감싸 답하는 경우가 있어 한 겹 벗긴다 */
+const unwrap = (v: unknown): unknown => {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const o = v as Record<string, unknown>;
+    for (const k of ["value", "rate", "amount", "years", "answer", "result"]) if (o[k] !== undefined) return o[k];
+    const vals = Object.values(o);
+    if (vals.length === 1) return vals[0];
+  }
+  return v;
+};
+
+const coerce = (kind: LlmField["kind"], raw: unknown): string | number | boolean | null => {
+  const v = unwrap(raw);
   if (v === null || v === undefined || v === "") return null;
   if (kind === "bool") return v === true || v === "true" || v === "예";
   if (kind === "text") return String(v).slice(0, 120);
@@ -74,7 +86,7 @@ export async function fillWithLlm(base: ParseResult, doc: ExtractedDoc, ask: Llm
   const have = new Set(base.evidence.map((e) => e.path));
   const want = LLM_FIELDS.filter((f) => !have.has(f.path));
   if (!want.length) return base;
-  let answers: Record<string, string | number | boolean> = {};
+  let answers: Record<string, unknown> = {};
   try {
     answers = await ask({ fields: want, excerpts: excerptsFor(doc, want) });
   } catch (e) {
@@ -87,7 +99,8 @@ export async function fillWithLlm(base: ParseResult, doc: ExtractedDoc, ask: Llm
     const v = coerce(f.kind, answers[f.path]);
     if (v === null) continue;
     setPath(spec as unknown as Record<string, unknown>, f.path, v);
-    evidence.push({ path: f.path, label: f.label, value: v, raw: String(answers[f.path]), source: "AI 추정", confidence: conf });
+    const raw = typeof answers[f.path] === "object" ? JSON.stringify(answers[f.path]) : String(answers[f.path]);
+    evidence.push({ path: f.path, label: f.label, value: v, raw, source: "AI 추정", confidence: conf });
   }
   const missing = base.missing.filter((m) => !want.some((f) => f.label === m && answers[f.path] !== undefined));
   return { spec, evidence, missing, warnings: base.warnings };

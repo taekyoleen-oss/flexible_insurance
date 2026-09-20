@@ -20,6 +20,7 @@ MethodSpec  ←─ adapter ──  앱의 입력 조건
 | `spec.ts` | MethodSpec 모델 · Evidence(출처·확신도) · `validateSpec` | **없음** (import 0개) |
 | `render.ts` | MethodSpec → 블록 → 화면/Markdown/HTML | `spec.ts` 만 |
 | `extract.ts` | 파일 → 문단·표. ZIP 은 `DecompressionStream`, HWP 는 OLE2 직접 파싱 | 없음(XLSX 는 주입) |
+| `pdf.ts` | PDF → 문단·표(좌표로 표 복원). 동적 import 라 다른 화면 번들에 안 들어간다 | `pdfjs-dist` |
 | `parse.ts` | 문단·표 → MethodSpec + Evidence. 동의어·단위 사전 포함 | `spec.ts` `extract.ts` |
 | `llm.ts` | 규칙이 못 찾은 항목만 LLM 에 묻는 선택 경로. `ask` 를 안 넘기면 꺼짐 | 없음 |
 
@@ -40,7 +41,8 @@ MethodSpec  ←─ adapter ──  앱의 입력 조건
 | HWP 5.x | 문단. 표는 아직 미지원, 수식 객체는 `[수식]` 자리표시자 |
 | HWPX | 문단 + 표 |
 | XLSX·CSV·TXT | 표·줄 |
-| PDF·구형 HWP·DRM 파일 | **읽지 못함** — `ExtractError.why` 로 이유를 알려준다 |
+| PDF (글자 레이어 있음) | 문단 + 표. 표는 글자 좌표로 되살린다(병합 셀이 많으면 줄로만). 브라우저는 `public/pdf.worker.min.mjs` 필요 |
+| 스캔 PDF·구형 HWP·DRM 파일 | **읽지 못함** — `ExtractError.why` 로 이유를 알려준다 |
 
 - **수식은 뽑지 않는다.** 산출방법서의 수식은 HWP 수식객체·이미지다. 기호·산식은 앱 쪽 정의를 쓴다.
 - **자동 적용하지 않는다.** 모든 값은 Evidence(원문·출처·확신도)를 달고 나오며, 사람이 고른 것만 반영한다.

@@ -7,10 +7,13 @@
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prebuild": "node scripts/copy-pdf-worker.mjs",
+    "predev": "node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "next": "15.5.24",
+    "pdfjs-dist": "^6.3.289",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "recharts": "^3.10.1",

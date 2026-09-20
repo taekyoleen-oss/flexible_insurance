@@ -2,6 +2,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { PlanGuide } from "@/components/builder/plan-guide";
+import { PlanLibrary } from "@/components/builder/plan-library";
 import { PlanProvider, usePlan } from "@/components/builder/plan-provider";
 import { BenefitChart, PlanEvidence, PlanReserveTable, PremiumCard, ReserveChart } from "@/components/builder/plan-result";
 import { RateSheetPanel } from "@/components/builder/rate-sheet";
@@ -47,6 +48,7 @@ function Builder() {
         <ReserveChart />
         <PlanReserveTable />
         <PlanEvidence />
+        <PlanLibrary />
         <PlanGuide />
       </div>
     </>
