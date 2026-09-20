@@ -53,20 +53,33 @@ export function applySpecToPlan(spec: MethodSpec, accepted: Evidence[]): number 
   if (take.has("basis.lowRatio") && num(spec.basis.lowRatio) !== null) { base.low = { ...base.low, on: true, ratio: spec.basis.lowRatio! }; count++; }
 
   // 사업비 — 기호가 잡힌 항목만 옮긴다(산출방법서형 기준)
+  const isAnnual = (x: MethodSpec["expenses"][number]) => /기준\s*연납\s*순보험료/.test(x.basis) || x.times !== undefined;
   const e = { ...base.expenses };
   if (e.model === "method") {
     let hit = false;
+    // 한 문서에 상품이 여럿 실린 산출방법서가 있다 — 같은 기호가 다시 나와도 앞엣것을 남긴다
+    const done = new Set<string>();
+    const put = (key: "alphaS" | "alphaP" | "betaS" | "betaG" | "betaPrime" | "gamma", v: number) => {
+      if (done.has(key)) return;
+      done.add(key); e[key] = v; hit = true;
+    };
     for (let i = 0; i < spec.expenses.length; i++) {
       if (!take.has(`expenses[${i}]`)) continue;
       const x = spec.expenses[i];
       const v = x.rate ?? x.times;
       if (v === undefined) continue;
-      if (x.symbol === "α_S") { e.alphaS = v; hit = true; }
-      else if (x.symbol === "α_P") { e.alphaP = v; hit = true; }
-      else if (x.symbol === "β_S") { e.betaS = v; hit = true; }
-      else if (x.symbol === "β_G") { e.betaG = v; hit = true; }
-      else if (x.symbol === "β_기타") { e.gamma = v; hit = true; }
-      else if (x.symbol === "γ") { e.gamma = v; hit = true; }
+      const after = x.phase === "납입후";
+      if (x.symbol === "α_S") put("alphaS", v);
+      else if (x.symbol === "α_P") put("alphaP", v);
+      else if (x.symbol === "β_S") put(after ? "betaPrime" : "betaS", v);
+      else if (x.symbol === "β_G") put("betaG", v);
+      else if (x.symbol === "β_기타" || x.symbol === "β′" || x.symbol === "β'") put("betaPrime", v);   // 납입 후 유지비
+      else if (x.symbol === "γ") put("gamma", v);
+      // 산출방법서마다 기호를 α1·α2·β1·β2 로만 적기도 한다
+      else if (x.symbol === "α1") put(isAnnual(x) ? "alphaP" : "alphaS", v);
+      else if (x.symbol === "α2") put("alphaS", v);
+      else if (x.symbol === "β1") put(/보험료|공제료|부담금/.test(x.basis) ? "betaG" : "betaS", v);
+      else if (x.symbol === "β2") put("betaPrime", v);
     }
     if (hit) { base.expenses = e; count++; }
   }

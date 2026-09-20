@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import kli7 from "@/lib/engine/data/rates-kli7.json";
 import cancerRates from "@/lib/engine/data/rates-cancer.json";
 import cancerHosp from "@/lib/engine/data/rates-cancer-hosp.json";
+import ciRates from "@/lib/engine/data/rates-ci.json";
 import type { RateTable, Sex } from "@/lib/engine";
 import { colLetter, evaluateSheet, type CellError, type SheetValues } from "./sheet-formula";
 
@@ -9,6 +10,7 @@ export const MAX_AGE = 120;
 const TABLE = kli7 as RateTable;
 const CANCER = cancerRates as RateTable;
 const HOSP = cancerHosp as { M: number[]; F: number[] };
+const CI = ciRates as { stroke: { M: number[]; F: number[] }; ami: { M: number[]; F: number[] } };
 
 /**
  * 위험률 유형. 담보·납입면제와 어떻게 이어지는지를 이 값이 정한다.
@@ -174,8 +176,20 @@ export const RATE_PRESETS: RatePreset[] = [
     values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a))) },
   { id: "cancerHosp", label: "암입원 연간 기대일수 (암입원율 × 365)", kind: "recurring", waiver: false, note: "제공받은 실제 값. 일당형 담보용",
     values: (s, ages) => ages.map((a) => roundRate(at(HOSP[s], a) * 365)) },
-  { id: "twoMajor", label: "2대질병 발생률 (사망률 × 0.65, 임시)", kind: "incidence", waiver: false, note: "뇌출혈 0.35 + 급성심근경색 0.30. 회사 요율로 교체하세요",
-    values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].q, a) * 0.65)) },
+  { id: "stroke", label: "뇌출혈 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~84세, 그 뒤는 84세 값 유지)",
+    values: (s, ages) => ages.map((a) => roundRate(at(CI.stroke[s], a))) },
+  { id: "ami", label: "급성심근경색증 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~79세, 그 뒤는 79세 값 유지)",
+    values: (s, ages) => ages.map((a) => roundRate(at(CI.ami[s], a))) },
+  { id: "twoMajor", label: "2대질병 발생률 (뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "제공받은 두 발생률의 합",
+    values: (s, ages) => ages.map((a) => roundRate(at(CI.stroke[s], a) + at(CI.ami[s], a))) },
+  { id: "threeMajor", label: "3대질병 발생률 (암 + 뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "제공받은 세 발생률의 합",
+    values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
+  // 메리츠 「보험료납입지원 특별약관」 산출방법서의 지급사유 구성(고도후유장해 + 3대질병 진단)을 본떴다.
+  // 그 방법서의 탈퇴율은 후유장해발생률(80%이상)·암·뇌졸중·급성심근경색증발생률의 합이다.
+  // 여기서는 80%이상 장해율이 없어 제7회 장해 50%이상 발생률로 대신한다 — 실제보다 넓어 보험료가 조금 크게 나온다.
+  { id: "waiverSupport", label: "납입면제 발생률 (고도후유장해 + 3대질병)", kind: "other", waiver: true,
+    note: "메리츠 보험료납입지원 특약 구성. 장해는 제7회 50%이상 발생률로 대신(80%이상보다 넓음)",
+    values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].f, a) + at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
   { id: "blank", label: "빈 열 (직접 입력·수식)", kind: "other", waiver: false, note: "0으로 채우고 셀에 값이나 수식을 넣습니다",
     values: (_s, ages) => ages.map(() => 0) },
 ];

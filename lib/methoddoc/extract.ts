@@ -233,10 +233,35 @@ export async function extractHwp(buf: Uint8Array): Promise<ExtractedDoc> {
   return { kind: "hwp", paragraphs, tables: [], warnings };
 }
 
-/** 텍스트·CSV */
+/**
+ * 텍스트·CSV·Markdown.
+ * Markdown 파이프 표(`| a | b |` 다음 줄에 `|---|---|`)는 표로 되살린다 —
+ * 이 앱이 낸 산출방법서를 다시 읽어 들이는 왕복이 표까지 이어지도록.
+ */
 export function extractText(buf: Uint8Array): ExtractedDoc {
-  const t = dec(buf).replace(/\r\n/g, "\n");
-  return { kind: "text", paragraphs: t.split("\n").map((x) => x.trim()).filter(Boolean), tables: [], warnings: [] };
+  const lines = dec(buf).replace(/\r\n/g, "\n").split("\n").map((x) => x.trim());
+  const cells = (l: string) => l.replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, "|").trim());
+  const isRow = (l: string) => l.startsWith("|") && l.endsWith("|") && l.length > 2;
+  const isRule = (l: string) => isRow(l) && cells(l).every((c) => /^:?-{2,}:?$/.test(c));
+  const paragraphs: string[] = [];
+  const tables: DocTable[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l) continue;
+    if (isRow(l) && isRule(lines[i + 1] ?? "")) {
+      const head = cells(l);
+      const rows: string[][] = [];
+      let j = i + 2;
+      for (; j < lines.length && isRow(lines[j]) && !isRule(lines[j]); j++) rows.push(cells(lines[j]));
+      tables.push({ head, rows });
+      // 표 안의 글자도 본문 규칙이 볼 수 있게 줄로도 남긴다
+      for (const r of [head, ...rows]) paragraphs.push(r.filter(Boolean).join(" "));
+      i = j - 1;
+      continue;
+    }
+    paragraphs.push(l);
+  }
+  return { kind: "text", paragraphs, tables, warnings: [] };
 }
 
 /** XLSX 는 호출부가 시트 읽기 함수를 넘긴다(SheetJS 주입) */

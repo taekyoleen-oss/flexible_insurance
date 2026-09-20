@@ -37,7 +37,7 @@ export function RidersPanel() {
         <dt className="text-navy/60">특약 합계 ({rows.filter((r) => r.on).length}건)</dt><dd className="font-mono">{won(extra)}</dd>
         <dt className="font-medium text-navy">최종 합계</dt><dd className="font-mono font-medium text-navy">{won(main + extra)}</dd>
       </dl>
-      <p className="mt-2 text-[11px] text-navy/50">암발생률(2024-112호)과 암입원율은 제공받은 값입니다. &quot;(임시)&quot; 위험률은 회사 요율이 없어 사망률·암발생률에 계수를 곱한 값이며 회사 위험률로 교체하면 보험료가 바뀝니다.</p>
+      <p className="mt-2 text-[11px] text-navy/50">암발생률(2024-112호)·암입원율·뇌출혈·급성심근경색증 발생률은 제공받은 실제 값입니다. &quot;(임시)&quot; 표시가 붙은 암수술·일반입원만 회사 요율이 없어 계수를 곱한 값이며, 회사 위험률로 교체하면 보험료가 바뀝니다.</p>
     </Card>
   );
 }
