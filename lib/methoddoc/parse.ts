@@ -1,5 +1,5 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { emptySpec, validateSpec, type Confidence, type Evidence, type ExpenseItem, type MethodSpec, type ParseResult, type RateRef, type RateRole } from "./spec";
+import { emptySpec, RATE_ROLE_LABEL, validateSpec, type Confidence, type Evidence, type ExpenseItem, type MethodSpec, type ParseResult, type RateRef, type RateRole } from "./spec";
 
 /**
  * 산출방법서 → MethodSpec. 규칙(표 먼저, 본문 다음)만으로 돌아간다 — LLM 은 선택이다.
@@ -120,6 +120,8 @@ const ROLE_WORDS: { re: RegExp; role: RateRole }[] = [
   { re: /해지율/, role: "lapse" },
 ];
 const roleOf = (name: string): RateRole => ROLE_WORDS.find((x) => x.re.test(name))?.role ?? "other";
+/** "사망 · 최초발생 · 반복지급 · 납입면제" 처럼 유형이 칸으로 적힌 표를 되읽을 때 쓴다 */
+const ROLE_BY_LABEL = new Map(Object.entries(RATE_ROLE_LABEL).map(([k, v]) => [v, k as RateRole]));
 
 /** 위험률 계열 이름으로 볼 만한지 — 수익성 분석의 '최적OO율·할인율·수익률' 같은 잡음을 거른다 */
 const RISK_WORD = /(사망|발생|진단|이환|입원|통원|수술|장해|치매|암|상해|질병|간병|지급률|해지율|재해|후유)/;
@@ -218,6 +220,26 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     spec.rates.push(ref);
     evidence.push({ path: `rates[${spec.rates.length - 1}]`, label: "위험률", value: name, raw: line, source: `본문 ${li + 1}줄`, confidence: source ? "medium" : "low" });
   }
+  // 위험률을 통째로 표로 싣는 문서("위험률 | 유형 | 근거·출처 | 표"). 이 앱이 낸 산출방법서가 이 모양이라 왕복이 이어진다
+  for (const [ti, t] of doc.tables.entries()) {
+    const head = t.head.map((c) => squeeze(c).trim());
+    if (!/^위험[률율]$/.test(head[0] ?? "")) continue;
+    const roleCol = head.findIndex((c) => /^유형$/.test(c));
+    const srcCol = head.findIndex((c) => /(근거|출처)/.test(c));
+    for (const row of t.rows) {
+      const name = (row[0] ?? "").replace(/\s+/g, " ").trim();
+      if (!name || name.length > 80 || spec.rates.some((r) => r.name === name)) continue;
+      // 이름이 "주계약 · 암발생률" 처럼 계약 단위를 달고 있으면 유형 판정은 뒤쪽만 본다
+      const bare = name.includes(" · ") ? name.slice(name.lastIndexOf(" · ") + 3) : name;
+      const role = (roleCol >= 0 ? ROLE_BY_LABEL.get((row[roleCol] ?? "").trim()) : undefined) ?? roleOf(bare);
+      if (role === "lapse") continue;
+      const src = srcCol >= 0 ? (row[srcCol] ?? "").trim() : "";
+      spec.rates.push({ id: `r${spec.rates.length + 1}`, name, role, source: src || undefined });
+      evidence.push({ path: `rates[${spec.rates.length - 1}]`, label: "위험률", value: name,
+        raw: row.filter(Boolean).join(" | ").slice(0, 140), source: `표 ${ti + 1}`, confidence: "high" });
+    }
+  }
+
   // 표에 적힌 위험률 근거도 줍는다
   for (const t of doc.tables) {
     for (const row of t.rows) {

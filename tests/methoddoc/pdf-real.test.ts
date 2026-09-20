@@ -100,9 +100,15 @@ describe.runIf(ALL)("실제 산출방법서 PDF 7건", () => {
   it("사업비 비율은 모두 0~100% 안이고, 이율은 0~20% 안이다", () => {
     for (const c of CASES) {
       const s = parsed.get(c.key)!.spec;
-      for (const e of s.expenses) if (e.rate !== undefined) expect(e.rate).toBeGreaterThan(0).toBeLessThanOrEqual(1);
+      for (const e of s.expenses) {
+        if (e.rate === undefined) continue;
+        expect(e.rate).toBeGreaterThan(0);
+        expect(e.rate).toBeLessThanOrEqual(1);
+      }
       for (const v of [s.basis.interest, s.basis.standardInterest, s.basis.minGuaranteed, s.basis.averagePublished]) {
-        if (v !== undefined) expect(v).toBeGreaterThan(0).toBeLessThan(0.2);
+        if (v === undefined) continue;
+        expect(v).toBeGreaterThan(0);
+        expect(v).toBeLessThan(0.2);
       }
     }
   });

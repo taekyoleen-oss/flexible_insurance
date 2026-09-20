@@ -7,9 +7,12 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
-const SRC = "docs/산출방법서_설계형보험.md";
-const OUT_DOCX = "docs/산출방법서_설계형보험.docx";
-const OUT_PDF = "docs/산출방법서_설계형보험.pdf";
+// 인자로 Markdown 경로를 넘기면 그 문서를 만든다. 없으면 산출방법서를 기본으로 한다.
+const SRC = process.argv[2] ?? "docs/산출방법서_설계형보험.md";
+const BASE = SRC.replace(/\.md$/, "");
+const OUT_DOCX = `${BASE}.docx`;
+const OUT_PDF = `${BASE}.pdf`;
+const TITLE = process.argv[3] ?? "보험료 및 책임준비금 산출방법서";
 const TMP = process.env.TEMP ?? ".";
 const TMP_MD = join(TMP, "method-doc.md");
 const TMP_HTML = join(TMP, "method-doc.html");
@@ -43,7 +46,7 @@ hr { border: none; border-top: 1px solid #ddd; margin: 18px 0; }
 `, "utf8");
 
 execFileSync("pandoc", [TMP_MD, "-f", FROM, "-t", "html5", "-o", TMP_HTML, "--standalone", "--toc", "--toc-depth=2",
-  "--metadata", "title=보험료 및 책임준비금 산출방법서", "-c", TMP_CSS, "--embed-resources"], { stdio: "inherit" });
+  "--metadata", `title=${TITLE}`, "-c", TMP_CSS, "--embed-resources"], { stdio: "inherit" });
 
 const PW = join(process.env.LOCALAPPDATA ?? "", "npm-cache/_npx/9833c18b2d85bc59/node_modules/playwright-core/index.js");
 const CHROME = join(process.env.LOCALAPPDATA ?? "", "ms-playwright/chromium-1234/chrome-win64/chrome.exe");
