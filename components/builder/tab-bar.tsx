@@ -34,7 +34,7 @@ export function TabBar() {
                 <button type="button" onClick={() => (on ? setEditing(t.id) : dispatch({ type: "selectTab", id: t.id }))}
                   title={on ? "한 번 더 누르면 이름을 고칩니다" : "이 탭 보기"}
                   className={`text-sm ${on ? "font-semibold text-navy" : "text-navy/60"}`}>
-                  {i === 0 && <span className="mr-1 rounded bg-sky/15 px-1 text-[10px] font-medium text-sky">주</span>}
+                  {i === 0 && t.name !== "주계약" && <span className="mr-1 rounded bg-sky/15 px-1 text-[10px] font-medium text-sky">주계약</span>}
                   {t.name}
                 </button>
               )}
