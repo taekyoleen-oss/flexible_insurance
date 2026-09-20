@@ -3,7 +3,7 @@ import Link from "next/link";
 import { FormulaText } from "@/components/formula-text";
 import { PlanProvider, usePlan } from "@/components/builder/plan-provider";
 import { Button } from "@/components/ui";
-import { buildPlanDoc, docToMarkdown, type DocBlock } from "@/lib/plan-doc";
+import { buildPlanDoc, docToHtml, docToMarkdown, planDocTitle, type DocBlock } from "@/lib/plan-doc";
 
 function Block({ b }: { b: DocBlock }) {
   if (b.t === "p") return <p className="mt-2 text-sm text-navy/80">{b.text}</p>;
@@ -24,14 +24,16 @@ function Block({ b }: { b: DocBlock }) {
 }
 
 function Doc() {
-  const { state: s, result, sheet, loaded } = usePlan();
+  const { state: s, product, loaded } = usePlan();
   if (!loaded) return null;
-  const title = `${s.productName || "상품"} 보험료 및 책임준비금 산출식`;
-  const sections = buildPlanDoc(s, result, sheet);
-  const save = () => {
-    const url = URL.createObjectURL(new Blob(["﻿" + docToMarkdown(sections, title)], { type: "text/markdown;charset=utf-8" }));
+  const title = planDocTitle(s);
+  const sections = buildPlanDoc(s, product);
+  const file = (s.productName || "상품").replace(/[^\w가-힣]+/g, "_");
+  const save = (kind: "md" | "html") => {
+    const body = kind === "md" ? "﻿" + docToMarkdown(sections, title) : docToHtml(sections, title);
+    const url = URL.createObjectURL(new Blob([body], { type: kind === "md" ? "text/markdown;charset=utf-8" : "text/html;charset=utf-8" }));
     const a = document.createElement("a");
-    a.href = url; a.download = `${(s.productName || "상품").replace(/[^\w가-힣]+/g, "_")}_산출식.md`; a.click();
+    a.href = url; a.download = `${file}_산출방법서.${kind}`; a.click();
     URL.revokeObjectURL(url);
   };
   return (
@@ -39,18 +41,19 @@ function Doc() {
       <div className="no-print mb-4 flex flex-wrap items-center gap-2">
         <Link href="/builder" className="text-sm text-sky hover:underline">← 상품 만들기</Link>
         <div className="flex-1" />
-        <Button onClick={save}>Markdown 내려받기</Button>
+        <Button onClick={() => save("md")}>Markdown</Button>
+        <Button onClick={() => save("html")}>HTML</Button>
         <Button primary onClick={() => window.print()}>인쇄 / PDF 저장</Button>
       </div>
       <h1 className="font-display text-2xl text-navy">{title}</h1>
-      <p className="mt-1 text-xs text-navy/50">지금 입력한 조건으로 실제 수행한 계산입니다. 기호는 보험수리 표기를 따릅니다.</p>
+      <p className="mt-1 text-xs text-navy/50">지금 입력한 조건으로 실제 수행한 계산입니다. 기호는 보험수리 표기를 따르고, 목차는 참조 산출방법서(기초율 → 급부 → 보험료 → 책임준비금 → 해지환급금)를 따릅니다.</p>
       {sections.map((sec) => (
         <section key={sec.id} className="mt-6 break-inside-avoid">
           <h2 className="border-b border-navy/15 pb-1 font-display text-lg text-navy">{sec.title}</h2>
           {sec.blocks.map((b, i) => <Block key={i} b={b} />)}
         </section>
       ))}
-      <p className="mt-8 text-xs text-navy/50">산출 엔진과 기호 정의는 docs/산출방법서_설계형보험.md 와 같습니다.</p>
+      <p className="mt-8 text-xs text-navy/50">중립 모델(MethodSpec)을 거쳐 만듭니다 — <span className="font-mono">lib/methoddoc</span>. 같은 모델을 거꾸로 읽어 조건을 채우는 것이 <a href="/method" className="text-sky underline">산출방법서 변환기</a>입니다.</p>
     </div>
   );
 }

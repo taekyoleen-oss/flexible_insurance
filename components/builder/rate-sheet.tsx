@@ -5,6 +5,7 @@ import { Button, Card, Input, NumInput, Select } from "@/components/ui";
 import { parseRateFile, parseRateText, rateCsv, RATE_KINDS, RATE_PRESETS, type RateKind } from "@/lib/plan-rates";
 import { CELL_ERROR_KO, colLetter, isFormula } from "@/lib/sheet-formula";
 import { COLUMN_RECIPES, snippetsFor } from "@/lib/sheet-snippets";
+import { COLUMN_ORIGIN_LABEL, columnOrigin } from "@/lib/plan-state";
 
 const download = (name: string, text: string) => {
   const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
@@ -25,8 +26,9 @@ const KIND_TONE: Record<RateKind, string> = {
  * 칸에는 숫자나 `=수식`을 넣는다 — 수식은 Excel처럼 A1 참조를 쓰고, 고른 칸에 맞는 추천을 옆에 띄운다.
  */
 export function RateSheetPanel() {
-  const { state: s, dispatch, sheet: res } = usePlan();
-  const sh = s.sheet;
+  const { state: s, dispatch, sheet: res, tab, main } = usePlan();
+  const sh = tab.sheet;
+  const isMain = tab.id === main.id;
   const [sel, setSel] = useState<{ col: number; row: number }>({ col: 0, row: 0 });
   const [draft, setDraft] = useState("");
   const [msg, setMsg] = useState("");
@@ -128,6 +130,9 @@ export function RateSheetPanel() {
                     <button type="button" onClick={() => dispatch({ type: "removeColumn", colId: c.id })} disabled={sh.columns.length <= 1}
                       className="shrink-0 px-1 text-navy/40 hover:text-[#a34a1e] disabled:opacity-30" title="열 삭제">×</button>
                   </div>
+                  {!isMain && (() => { const o = columnOrigin(main, tab, c); return (
+                    <div className={`mt-0.5 truncate text-[10px] ${o === "main-changed" ? "text-[#a34a1e]" : o === "own" ? "text-sky" : "text-navy/35"}`} title={COLUMN_ORIGIN_LABEL[o]}>{COLUMN_ORIGIN_LABEL[o]}</div>
+                  ); })()}
                   <div className="mt-1 flex items-center gap-1">
                     <select value={c.kind} onChange={(e) => dispatch({ type: "column", colId: c.id, patch: { kind: e.target.value as RateKind } })}
                       title={RATE_KINDS.find((k) => k.kind === c.kind)?.hint}

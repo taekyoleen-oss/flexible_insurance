@@ -5,8 +5,9 @@ import { usePlan } from "./plan-provider";
 import { Button, Field, Input, NumInput, Select } from "@/components/ui";
 import { pct, won } from "@/lib/format";
 import { kindLabel, RATE_KINDS } from "@/lib/plan-rates";
+import { COLUMN_ORIGIN_LABEL, columnOrigin } from "@/lib/plan-state";
 import { colLetter } from "@/lib/sheet-formula";
-import { FREQS, PAY_YEARS, kindMeta, type ContractPatch, type CoveragePatch, type PlanStepCard, type StepStatus } from "@/lib/plan-state";
+import { FREQS, PAY_YEARS, kindMeta, TAB_COND_LABEL, type BasePatch, type CoveragePatch, type PlanStepCard, type StepStatus, type TabConditions } from "@/lib/plan-state";
 
 const BADGE: Record<StepStatus, { label: string; cls: string }> = {
   idle: { label: "대기", cls: "bg-navy/5 text-navy/50" },
@@ -23,6 +24,25 @@ const Pct = ({ label, value, onCommit, hint }: { label: string; value: number; o
     </div>
   </Field>
 );
+
+/** 특약 탭에서 이 단계가 주계약 값을 쓰는지, 덮었는지 알리고 되돌릴 수 있게 한다 */
+function Inherited({ keys }: { keys: (keyof TabConditions)[] }) {
+  const { tab, main, dispatch } = usePlan();
+  if (tab.id === main.id) return null;
+  const on = keys.filter((k) => tab.overrides[k] !== undefined);
+  return (
+    <p className="mb-2 rounded bg-cream px-2 py-1.5 text-[11px] text-navy/60">
+      {on.length === 0 ? "주계약 값을 그대로 씁니다. 여기서 고치면 이 특약만 달라집니다." : (
+        <>주계약과 다름: {on.map((k) => (
+          <button key={k} type="button" onClick={() => dispatch({ type: "resetOverride", key: k })}
+            className="mr-1 rounded bg-[#fef3c7] px-1.5 py-0.5 text-[#92400e] underline" title="주계약 값으로 되돌립니다">
+            {TAB_COND_LABEL[k]} 되돌리기
+          </button>
+        ))}</>
+      )}
+    </p>
+  );
+}
 
 /** Life_Prem_Calc 파이프라인과 같은 모양의 단계 카드 — 번호·코드·제목·상태 배지·요약 칩·ⓘ·이동·삭제·펼치기 */
 function StepCard({ step, index, expanded, onToggle, move, remove, children }: {
@@ -41,6 +61,7 @@ function StepCard({ step, index, expanded, onToggle, move, remove, children }: {
             <span className="font-mono text-xs text-navy/40">{step.code}</span>
             <h3 className="text-sm font-semibold text-navy">{step.title}</h3>
             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${b.cls}`}>{b.label}</span>
+            {step.overridden && <span className="rounded-full bg-[#fef3c7] px-2 py-0.5 text-[11px] font-medium text-[#92400e]" title="주계약과 다르게 둔 조건이 있습니다">주계약과 다름</span>}
           </div>
           {!expanded && step.summary.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
@@ -69,51 +90,59 @@ function StepCard({ step, index, expanded, onToggle, move, remove, children }: {
 // ── 단계 본문 ────────────────────────────────────────────────────────────────
 function ProductBody() {
   const { state: s, dispatch } = usePlan();
-  const set = (patch: ContractPatch) => dispatch({ type: "contract", patch });
+  const set = (patch: BasePatch) => dispatch({ type: "product", patch });
   return (
     <div className="space-y-3">
       <Field label="상품 이름"><Input value={s.productName} onChange={(e) => set({ productName: e.target.value })} className="font-sans" /></Field>
       <Field label="메모"><Input value={s.memo} onChange={(e) => set({ memo: e.target.value })} className="font-sans" placeholder="산출 조건·출처 메모" /></Field>
+      <p className="text-[11px] text-navy/50">시트 탭은 주계약 1장 + 특약 여러 장입니다. 특약은 주계약 조건을 물려받고, 다르게 둔 것만 표시합니다. 지금 {s.tabs.length}장.</p>
     </div>
   );
 }
 
 function ContractBody() {
-  const { state: s, dispatch, result } = usePlan();
-  const set = (patch: ContractPatch) => dispatch({ type: "contract", patch });
+  const { state: s, dispatch, result, cond } = usePlan();
+  const base = (patch: BasePatch) => dispatch({ type: "product", patch });
+  const set = (patch: Partial<TabConditions>) => dispatch({ type: "conditions", patch });
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <Field label="성별"><Select value={s.sex} onChange={(e) => set({ sex: e.target.value as "M" | "F" })}><option value="M">남</option><option value="F">여</option></Select></Field>
-      <Field label="가입나이"><NumInput value={s.age} min={0} max={90} onCommit={(v) => set({ age: Math.round(v) })} /></Field>
-      <Field label="보험기간" hint={s.termYears === 0 ? `자동 ${result.n}년` : "0 = 자동"}><NumInput value={s.termYears} min={0} max={110} onCommit={(v) => set({ termYears: Math.round(v) })} /></Field>
-      <Field label="납입기간">
-        <Select value={s.payYears} onChange={(e) => set({ payYears: Number(e.target.value) })}>
-          {PAY_YEARS.map((y) => <option key={y} value={y}>{y}년납</option>)}
-          {!PAY_YEARS.includes(s.payYears as (typeof PAY_YEARS)[number]) && <option value={s.payYears}>{s.payYears}년납</option>}
-        </Select>
-      </Field>
-      <Field label="납입주기"><Select value={s.freq} onChange={(e) => set({ freq: Number(e.target.value) })}>{FREQS.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}</Select></Field>
-    </div>
+    <>
+      <Inherited keys={["termYears", "payYears", "freq"]} />
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="성별" hint="계약 단위(탭 공통)"><Select value={s.sex} onChange={(e) => base({ sex: e.target.value as "M" | "F" })}><option value="M">남</option><option value="F">여</option></Select></Field>
+        <Field label="가입나이" hint="계약 단위(탭 공통)"><NumInput value={s.age} min={0} max={90} onCommit={(v) => base({ age: Math.round(v) })} /></Field>
+        <Field label="보험기간" hint={cond.termYears === 0 ? `자동 ${result.n}년` : "0 = 자동"}><NumInput value={cond.termYears} min={0} max={110} onCommit={(v) => set({ termYears: Math.round(v) })} /></Field>
+        <Field label="납입기간">
+          <Select value={cond.payYears} onChange={(e) => set({ payYears: Number(e.target.value) })}>
+            {PAY_YEARS.map((y) => <option key={y} value={y}>{y}년납</option>)}
+            {!PAY_YEARS.includes(cond.payYears as (typeof PAY_YEARS)[number]) && <option value={cond.payYears}>{cond.payYears}년납</option>}
+          </Select>
+        </Field>
+        <Field label="납입주기"><Select value={cond.freq} onChange={(e) => set({ freq: Number(e.target.value) })}>{FREQS.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}</Select></Field>
+      </div>
+    </>
   );
 }
 
 function BasisBody() {
-  const { state: s, dispatch } = usePlan();
+  const { dispatch, cond } = usePlan();
+  const set = (patch: Partial<TabConditions>) => dispatch({ type: "conditions", patch });
+  const low = (patch: Partial<TabConditions["low"]>) => set({ low: { ...cond.low, ...patch } });
   return (
     <div className="space-y-3">
+      <Inherited keys={["interest", "standardInterest", "low"]} />
       <div className="grid grid-cols-2 gap-3">
-        <Pct label="예정이율 i" value={s.interest} onCommit={(v) => dispatch({ type: "contract", patch: { interest: v } })} />
-        <Pct label="표준이율" value={s.standardInterest} onCommit={(v) => dispatch({ type: "contract", patch: { standardInterest: v } })} hint="표준책임준비금" />
+        <Pct label="예정이율 i" value={cond.interest} onCommit={(v) => set({ interest: v })} />
+        <Pct label="표준이율" value={cond.standardInterest} onCommit={(v) => set({ standardInterest: v })} hint="표준책임준비금" />
       </div>
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" className="accent-sky" checked={s.low.on} onChange={(e) => dispatch({ type: "low", patch: { on: e.target.checked } })} />
+        <input type="checkbox" className="accent-sky" checked={cond.low.on} onChange={(e) => low({ on: e.target.checked })} />
         저해지·무해지환급형
       </label>
-      {s.low.on && (
+      {cond.low.on && (
         <div className="grid grid-cols-2 gap-3">
-          <Pct label="환급률 w^r (0 = 무해지)" value={s.low.ratio} onCommit={(v) => dispatch({ type: "low", patch: { ratio: v } })} />
-          <Pct label="적용해지율 w" value={s.low.lapseRate} onCommit={(v) => dispatch({ type: "low", patch: { lapseRate: v } })} hint="납입기간 중에만" />
-          <p className="col-span-2 text-xs text-navy/55">납입기간 중 해약환급금 = 표준형 × {Math.round(s.low.ratio * 100)}%. 해지급부 현가 CSV를 급부 현가에 더해 다시 산출합니다.</p>
+          <Pct label="환급률 w^r (0 = 무해지)" value={cond.low.ratio} onCommit={(v) => low({ ratio: v })} />
+          <Pct label="적용해지율 w" value={cond.low.lapseRate} onCommit={(v) => low({ lapseRate: v })} hint="납입기간 중에만" />
+          <p className="col-span-2 text-xs text-navy/55">납입기간 중 해약환급금 = 표준형 × {Math.round(cond.low.ratio * 100)}%. 해지급부 현가 CSV를 급부 현가에 더해 다시 산출합니다.</p>
         </div>
       )}
     </div>
@@ -121,17 +150,17 @@ function BasisBody() {
 }
 
 function RatesBody() {
-  const { state: s, dispatch, sheet: res } = usePlan();
+  const { dispatch, sheet: res, tab, main } = usePlan();
   return (
     <div className="space-y-2">
-      <p className="text-xs text-navy/55">왼쪽 시트의 열입니다. 유형이 담보·납입면제와의 연결을 정합니다.</p>
+      <p className="text-xs text-navy/55">&quot;{tab.name}&quot; 탭 시트의 열입니다. 유형이 담보·납입면제와의 연결을 정합니다.</p>
       <ul className="space-y-1.5">
-        {s.sheet.columns.map((c, i) => (
+        {tab.sheet.columns.map((c, i) => (
           <li key={c.id} className="rounded border border-navy/10 p-2">
             <div className="flex items-center gap-1.5">
               <span className="font-mono text-[11px] text-navy/40">{colLetter(i + 1)}</span>
               <Input value={c.name} onChange={(e) => dispatch({ type: "column", colId: c.id, patch: { name: e.target.value } })} className="h-7 flex-1 py-0.5 font-sans text-xs" />
-              <button type="button" onClick={() => dispatch({ type: "removeColumn", colId: c.id })} disabled={s.sheet.columns.length <= 1} className="px-1 text-navy/40 hover:text-[#a34a1e] disabled:opacity-30" title="열 삭제">×</button>
+              <button type="button" onClick={() => dispatch({ type: "removeColumn", colId: c.id })} disabled={tab.sheet.columns.length <= 1} className="px-1 text-navy/40 hover:text-[#a34a1e] disabled:opacity-30" title="열 삭제">×</button>
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <Select value={c.kind} onChange={(e) => dispatch({ type: "column", colId: c.id, patch: { kind: e.target.value as typeof c.kind } })} className="w-auto py-0.5 text-xs">
@@ -144,6 +173,7 @@ function RatesBody() {
               <span className="font-mono text-[11px] text-navy/40">{(res.byId[c.id]?.[0] ?? 0).toPrecision(3)} …</span>
             </div>
             <p className="mt-1 text-[11px] text-navy/50">{RATE_KINDS.find((k) => k.kind === c.kind)?.hint}</p>
+            {tab.id !== main.id && <p className={`text-[11px] ${columnOrigin(main, tab, c) === "main-changed" ? "text-[#a34a1e]" : columnOrigin(main, tab, c) === "own" ? "text-sky" : "text-navy/40"}`}>{COLUMN_ORIGIN_LABEL[columnOrigin(main, tab, c)]}</p>}
           </li>
         ))}
       </ul>
@@ -152,19 +182,20 @@ function RatesBody() {
 }
 
 function WaiverBody() {
-  const { state: s, dispatch } = usePlan();
-  const cols = s.sheet.columns.filter((c) => c.waiver);
+  const { dispatch, tab, cond } = usePlan();
+  const cols = tab.sheet.columns.filter((c) => c.waiver);
   return (
     <div className="space-y-2">
+      <Inherited keys={["waiver"]} />
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" className="accent-sky" checked={s.waiver} onChange={(e) => dispatch({ type: "contract", patch: { waiver: e.target.checked } })} />
+        <input type="checkbox" className="accent-sky" checked={cond.waiver} onChange={(e) => dispatch({ type: "conditions", patch: { waiver: e.target.checked } })} />
         납입면제 적용
       </label>
       <p className="text-xs text-navy/55">
         납입면제 체크를 켠 열의 합이 납입자 집단 l′의 탈퇴율 f가 됩니다. 급부집단 l은 그대로라 보장은 계속됩니다.
       </p>
       <ul className="space-y-1">
-        {s.sheet.columns.map((c, i) => (
+        {tab.sheet.columns.map((c, i) => (
           <li key={c.id}>
             <label className="flex items-center gap-2 text-xs text-navy/70">
               <input type="checkbox" className="accent-sky" checked={c.waiver} onChange={(e) => dispatch({ type: "column", colId: c.id, patch: { waiver: e.target.checked } })} />
@@ -181,14 +212,14 @@ function WaiverBody() {
 }
 
 function CoverageBody({ id }: { id: string }) {
-  const { state: s, dispatch, result } = usePlan();
-  const c = s.coverages.find((x) => x.id === id)!;
+  const { state: s, dispatch, result, tab } = usePlan();
+  const c = tab.coverages.find((x) => x.id === id)!;
   const meta = kindMeta(c.kind);
   const row = result.coverages.find((r) => r.id === id);
   const set = (patch: CoveragePatch) => dispatch({ type: "coverage", id, patch });
   const setSegs = (steps: Segment[]) => set({ steps });
   const lastAge = Math.min(c.endAge, s.age + result.n - 1);
-  const letterOf = (colId: string) => { const i = s.sheet.columns.findIndex((x) => x.id === colId); return i < 0 ? "—" : colLetter(i + 1); };
+  const letterOf = (colId: string) => { const i = tab.sheet.columns.findIndex((x) => x.id === colId); return i < 0 ? "—" : colLetter(i + 1); };
 
   return (
     <div className="space-y-3">
@@ -210,7 +241,7 @@ function CoverageBody({ id }: { id: string }) {
         {c.kind !== "survival" && (
           <Field label="급부 열" hint={`${letterOf(c.eventColId)}열`}>
             <Select value={c.eventColId} onChange={(e) => set({ eventColId: e.target.value })}>
-              {s.sheet.columns.map((x, i) => <option key={x.id} value={x.id}>{colLetter(i + 1)} · {x.name} ({kindLabel(x.kind)})</option>)}
+              {tab.sheet.columns.map((x, i) => <option key={x.id} value={x.id}>{colLetter(i + 1)} · {x.name} ({kindLabel(x.kind)})</option>)}
             </Select>
           </Field>
         )}
@@ -220,7 +251,7 @@ function CoverageBody({ id }: { id: string }) {
         <p className="text-xs font-medium text-navy/70">탈퇴 열 (합산)</p>
         <p className="mb-1 text-[11px] text-navy/50">이 담보를 소멸시키는 사유 전부. 최초발생 열은 넣고, 반복지급 열은 넣지 않습니다.</p>
         <div className="flex flex-wrap gap-2">
-          {s.sheet.columns.map((x, i) => (
+          {tab.sheet.columns.map((x, i) => (
             <label key={x.id} className="flex items-center gap-1 rounded border border-navy/10 px-1.5 py-0.5 text-xs text-navy/70">
               <input type="checkbox" className="accent-sky" checked={c.exitColIds.includes(x.id)}
                 onChange={(e) => set({ exitColIds: e.target.checked ? [...c.exitColIds, x.id] : c.exitColIds.filter((y) => y !== x.id) })} />
@@ -276,11 +307,12 @@ function CoverageBody({ id }: { id: string }) {
 }
 
 function ExpenseBody() {
-  const { state: s, dispatch } = usePlan();
-  const e = s.expenses;
+  const { dispatch, cond } = usePlan();
+  const e = cond.expenses;
   const set = (patch: Record<string, number>) => dispatch({ type: "expenses", patch });
   return (
     <div className="space-y-3">
+      <Inherited keys={["expenses"]} />
       <Field label="모형">
         <Select value={e.model} onChange={(ev) => dispatch({ type: "expenseModel", model: ev.target.value as typeof e.model })}>
           <option value="method">산출방법서형 (α_S·α_P·β_S·β_G·β′·γ)</option>
@@ -310,30 +342,32 @@ function ExpenseBody() {
 }
 
 function ResultBody() {
-  const { state: s, result: r } = usePlan();
-  const eff = r.effective;
-  const paidOut = r.survival.slice(0, r.payYears + 1).reduce((a, b) => a + b, 0);
+  const { product: p, result: r, tab, cond } = usePlan();
+  const eff = p.effective;
+  const paidOut = p.survival.slice(0, p.payYears + 1).reduce((a, b) => a + b, 0);
+  const unit = cond.freq === 12 ? "월" : cond.freq === 1 ? "연" : `${12 / cond.freq}개월`;
   return (
     <div className="space-y-2 text-sm">
       <div>
-        <div className="text-xs text-navy/60">{s.freq === 12 ? "월" : s.freq === 1 ? "연" : `${12 / s.freq}개월`} 영업보험료</div>
+        <div className="text-xs text-navy/60">{unit} 영업보험료 (전 탭 합계)</div>
         <div className="font-mono text-2xl text-navy">{won(eff.monthlyGross)}</div>
       </div>
       <dl className="grid grid-cols-[1fr_auto] gap-y-1 text-xs">
-        <dt className="text-navy/60">순보험료</dt><dd className="font-mono">{won(eff.monthlyNet)}</dd>
-        <dt className="text-navy/60">총 납입 ({r.payYears}년)</dt><dd className="font-mono">{won(eff.totalPaid)}</dd>
-        <dt className="text-navy/60">납입 완료 환급률</dt><dd className="font-mono">{pct(eff.rate[r.payYears] ?? 0)}{paidOut > 0 && ` + ${won(paidOut)}`}</dd>
-        {r.low && <><dt className="text-navy/60">표준형 대비</dt><dd className="font-mono">−{pct(r.low.premiumDiscount)}</dd></>}
+        <dt className="text-navy/60">이 탭({tab.name})</dt><dd className="font-mono">{won(r.effective.monthlyGross)}</dd>
+        <dt className="text-navy/60">순보험료 합계</dt><dd className="font-mono">{won(eff.monthlyNet)}</dd>
+        <dt className="text-navy/60">총 납입</dt><dd className="font-mono">{won(eff.totalPaid)}</dd>
+        <dt className="text-navy/60">납입 완료 환급률</dt><dd className="font-mono">{pct(eff.rate[p.payYears] ?? 0)}{paidOut > 0 && ` + ${won(paidOut)}`}</dd>
+        {p.low && <><dt className="text-navy/60">표준형 대비</dt><dd className="font-mono">−{pct(p.low.premiumDiscount)}</dd></>}
       </dl>
-      <p className="text-[11px] text-navy/50">아래 그래프와 표에 담보별 보험료·연도별 보장금액·책임준비금·해약환급금이 나옵니다.</p>
+      <p className="text-[11px] text-navy/50">탭마다 따로 산출해 합칩니다. 아래 그래프와 표는 전체 합계입니다.</p>
     </div>
   );
 }
 
 /** 오른쪽 단계 목록 */
 export function StepList() {
-  const { state: s, dispatch, steps } = usePlan();
-  const covCount = s.coverages.length;
+  const { state: s, dispatch, steps, tab } = usePlan();
+  const covCount = tab.coverages.length;
   return (
     <div className="space-y-2">
       {steps.map((step, i) => {
@@ -353,16 +387,13 @@ export function StepList() {
           </StepCard>
         );
       })}
-      {idxGuard(covCount)}
       <div className="flex flex-wrap gap-2 rounded-xl border border-dashed border-navy/20 p-2">
-        <span className="self-center text-xs text-navy/60">담보 추가</span>
+        <span className="self-center text-xs text-navy/60">&quot;{tab.name}&quot;에 담보 추가</span>
         {BENEFIT_KINDS.map((k) => (
           <Button key={k.kind} onClick={() => dispatch({ type: "addCoverage", kind: k.kind })} disabled={covCount >= 12} title={k.hint}>＋ {k.label}</Button>
         ))}
       </div>
+      {covCount >= 12 && <p className="text-xs text-[#a34a1e]">담보는 탭마다 12개까지 넣을 수 있습니다.</p>}
     </div>
   );
 }
-
-// 담보 수가 상한에 닿았을 때만 안내를 띄운다
-const idxGuard = (n: number) => (n >= 12 ? <p className="text-xs text-[#a34a1e]">담보는 12개까지 넣을 수 있습니다.</p> : null);
