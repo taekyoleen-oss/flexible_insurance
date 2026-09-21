@@ -71,8 +71,8 @@ describe.runIf(has(REAL_DOCX))("실제 산출방법서 (DOCX · 무배당 간병
     expect(byRaw("6.8/1,000")?.rate).toBeCloseTo(0.0068, 12);
     expect(byRaw("9.0%")?.rate).toBeCloseTo(0.09, 12);
     expect(byRaw("2.5%")?.rate).toBeCloseTo(0.025, 12);
-    // 기준연납순보험료 기준 15% 는 비율이 아니라 배수로 본다
-    expect(byRaw("15%")?.times).toBeCloseTo(0.15, 12);
+    // "기준연납순보험료 X MIN(보험기간,20) | 15%" 는 비율이 아니라 20년치 배수 3배로 본다
+    expect(byRaw("15%")?.times).toBeCloseTo(3, 12);
     expect(byRaw("15%")?.basis).toContain("기준연납순보험료");
   });
   it("이율 2.5% 와 무해지 해지율 4.0%(납입기간 중)를 뽑는다", async () => {

@@ -76,12 +76,40 @@ const tagsOf = (xml: string, tag: string): string[] => {
   return out;
 };
 
+/**
+ * Word 에서 적은 식을 평문 표기로 — 수식 편집기(OMML)의 아래·위첨자·분수·Σ, 그리고 글자 서식의 아래·위첨자(Ctrl+=).
+ * 태그를 지우기 전에 표기를 끼워 넣는다: l_{x+t+1}, v^{t}, (a)/(b).
+ */
+export function wordMath(xml: string): string {
+  // 서식 첨자: Word 는 한 첨자를 여러 런으로 쪼개곤 한다 — 표지(\u0005 여는, \u0006·\u0007 닫는)를 달아 이웃 런끼리 잇고 괄호로 바꾼다
+  let s = xml.replace(/<w:r\b[^>]*>(?:(?!<\/w:r>)[\s\S])*?<w:vertAlign w:val="(subscript|superscript)"\/>(?:(?!<\/w:r>)[\s\S])*?<\/w:r>/g,
+    (run, v: string) => run.replace(/(<w:t(?:\s[^>]*)?>)([\s\S]*?)(<\/w:t>)/g, v === "subscript" ? "$1_\u0005$2\u0006$3" : "$1^\u0005$2\u0007$3"))
+    .replace(/\u0006((?:<[^>]*>)*)_\u0005/g, "$1").replace(/\u0007((?:<[^>]*>)*)\^\u0005/g, "$1")
+    .replace(/\u0005/g, "{").replace(/[\u0006\u0007]/g, "}");
+  if (s.includes("<m:")) s = s
+    .replace(/<m:chr m:val="([^"]*)"\/>/g, "$1")
+    .replace(/<m:dPr>[\s\S]*?<\/m:dPr>/g, "")
+    .replace(/<m:sub>/g, "_{").replace(/<\/m:sub>/g, "}").replace(/<m:sup>/g, "^{").replace(/<\/m:sup>/g, "}")
+    .replace(/<m:num>/g, "(").replace(/<\/m:num>/g, ")/").replace(/<m:den>/g, "(").replace(/<\/m:den>/g, ")")
+    .replace(/<m:d>/g, "(").replace(/<\/m:d>/g, ")");
+  return s;
+}
+
+/** 한글 수식 편집기 스크립트 → 평문 표기 ("l _{x+t+1} = l _{x+t} TIMES LEFT ( 1 - q _{x+t} RIGHT )") */
+const HWP_EQ: [RegExp, string][] = [
+  [/\{((?:[^{}]|\{[^{}]*\})*)\}\s*over\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, "($1)/($2)"], [/\b(LEFT|RIGHT|rm|it|bold)\b\s*/g, ""], [/[`~]/g, " "],
+  [/\bTIMES\b/gi, "×"], [/\bCDOT\b/gi, "·"], [/\bSUM\b/gi, "Σ"], [/\bprime\b/gi, "′"], [/>=|\bgeq?\b/gi, "≥"], [/<=|\bleq?\b/gi, "≤"],
+  [/\balpha\b/g, "α"], [/\bbeta\b/g, "β"], [/\bgamma\b/g, "γ"], [/\bdelta\b/g, "δ"], [/\btheta\b/g, "θ"], [/\bomega\b/g, "ω"],
+  [/\s+([_^′])/g, "$1"],
+];
+export const hwpEquation = (script: string) => HWP_EQ.reduce((s, [re, to]) => s.replace(re, to), script).replace(/\s+/g, " ").trim();
+
 /** DOCX — 문단(w:p)과 표(w:tbl) */
 export async function extractDocx(buf: Uint8Array): Promise<ExtractedDoc> {
   const zip = await unzip(buf);
   const doc = zip.get("word/document.xml");
   if (!doc) throw new ExtractError("word/document.xml 이 없습니다 — DOCX 가 아닙니다", "corrupt");
-  const xml = dec(doc);
+  const xml = wordMath(dec(doc));
   const body = xml.slice(xml.indexOf("<w:body"));
   const tables: DocTable[] = [];
   for (const tbl of tagsOf(body, "w:tbl")) {
@@ -106,7 +134,9 @@ export async function extractHwpx(buf: Uint8Array): Promise<ExtractedDoc> {
       if (rows.length) tables.push({ head: rows[0], rows: rows.slice(1) });
     }
     for (const p of tagsOf(xml.replace(/<hp:tbl[\s\S]*?<\/hp:tbl>/g, ""), "hp:p")) {
-      const t = tagsOf(p, "hp:t").map(strip).join("").trim();
+      // 글자(hp:t)와 수식 편집기로 넣은 식(hp:script)을 문단 안 순서대로
+      const t = [...p.matchAll(/<hp:t(?:\s[^>]*)?>([\s\S]*?)<\/hp:t>|<hp:script>([\s\S]*?)<\/hp:script>/g)]
+        .map((m) => (m[1] !== undefined ? strip(m[1]) : ` ${hwpEquation(strip(m[2]))} `)).join("").replace(/\s+/g, " ").trim();
       if (t) paragraphs.push(t);
     }
   }

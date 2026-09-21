@@ -217,6 +217,8 @@ export interface ParseResult {
   /** 못 찾은 필수 항목 */
   missing: string[];
   warnings: string[];
+  /** 표준 산출방법서로 읽었으면 그 판 ("표준 산출방법서 v1") — 수식·주석·절까지 읽었다는 뜻 */
+  format?: string;
 }
 
 /** 검수에서 고른 것만 반영할 수 있게, 경로별로 적용 여부를 받는다 */

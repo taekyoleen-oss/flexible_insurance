@@ -1,5 +1,5 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import type { DocSection } from "./render";
+import { FORMULA_MARK, NOTE_MARK, type DocSection } from "./render";
 
 /**
  * 산출방법서 ↔ LaTeX.
@@ -104,9 +104,10 @@ export function docToLatex(sections: DocSection[], title: string, today = new Da
     L.push(`\\section*{${escText(sec.title)}}`, "");
     for (const b of sec.blocks) {
       if (b.t === "p") {
-        L.push(/^\d+\.\d+\.\s/.test(b.text) ? `\\subsection*{${escText(b.text)}}` : escText(b.text), "");
+        L.push(b.kind === "label" ? `\\textbf{${escText(`${FORMULA_MARK} ${b.text}`)}}`
+          : /^\d+\.\d+\.\s/.test(b.text) ? `\\subsection*{${escText(b.text)}}` : escText(b.text), "");
       } else if (b.t === "note") {
-        L.push("\\begin{quote}\\small", escText(b.text), "\\end{quote}", "");
+        L.push("\\begin{quote}\\small", escText(`${NOTE_MARK} ${b.text}`), "\\end{quote}", "");
       } else if (b.t === "formula") {
         L.push(formulaToTex(b.text, "align*"), "");
       } else {

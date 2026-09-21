@@ -1,5 +1,7 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole } from "./spec";
+import { generateFormulas } from "./formulas";
+import { FORMULA_MARK, NOTE_MARK } from "./render";
+import { emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole } from "./spec";
 
 /**
  * 산출방법서 → MethodSpec. 규칙(표 먼저, 본문 다음)만으로 돌아간다 — LLM 은 선택이다.
@@ -108,7 +110,9 @@ const SYMBOL_CELL = /^[αβγ](['′]|[12]|_(?:S|P|G|기타))?$/;
 const isAmountBasis = (s: string) => /(보험\s*가입\s*금액|가입금액|보험금)/.test(s);
 // 공제는 "영업공제료·영업부담금" 이라 부른다
 const isPremiumBasis = (s: string) => /(영업\s*(보험료|공제료|부담금)|보험료|공제료|부담금)/.test(s);
-const isAnnualNet = (s: string) => /기준\s*연납\s*순보험료/.test(s);
+const isAnnualNet = (s: string) => /기준\s*연납\s*순(보험료|공제료)/.test(s);
+/** "12% × MIN(보험기간, 20)" 의 20 — 이 모듈의 α_P 는 20년 기준 배수라 비율 × 20 이 α_P 다(n < 20 이면 식이 n/20 을 곱한다) */
+const MIN_CAP = /MIN\s*\(\s*[^,()]*,\s*(\d+)\s*년?\s*\)/i;
 const isBasis = (s: string) => isAmountBasis(s) || isPremiumBasis(s) || isAnnualNet(s);
 
 const ROLE_WORDS: { re: RegExp; role: RateRole }[] = [
@@ -163,7 +167,9 @@ export interface ParseOptions {
   fallbackName?: string;
 }
 
-export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): ParseResult {
+export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): ParseResult {
+  // 표준 양식 맨 앞의 "작성 안내" 표는 읽지 않는다(안내 글의 예시 값이 조건으로 들어가지 않게)
+  const doc = { ...input, tables: input.tables.filter((t) => squeeze(t.head[0] ?? "").replace(/\s/g, "") !== "작성안내") };
   const spec = emptySpec(opt.fallbackName ?? "");
   const evidence: Evidence[] = [];
   const warnings = [...doc.warnings];
@@ -204,6 +210,9 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     }
   };
   const coverName = cover(/^상품명$/), coverKind = cover(/^종류$/);
+  // 개요 표의 "양식 | 표준 산출방법서 v1" — 이 표시가 있으면 수식·주석·절까지 정해진 순서로 읽는다
+  const format = cover(/^양식$/)?.[0];
+  const standard = !!format && /표준\s*산출방법서/.test(format);
   if (coverName) add("meta.productName", "상품명", coverName[0], `상품명 ${coverName[0]}`, `표 ${coverName[1] + 1}`, "high");
   if (title) add("meta.productName", "상품명", title, title, "표지", "medium");
   if (coverKind) add("meta.kind", "종류", coverKind[0], `종류 ${coverKind[0]}`, `표 ${coverKind[1] + 1}`, "high");
@@ -244,15 +253,26 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     if (!/^위험[률율]$/.test(head[0] ?? "")) continue;
     const roleCol = head.findIndex((c) => /^유형$/.test(c));
     const srcCol = head.findIndex((c) => /(근거|출처)/.test(c));
+    const idCol = head.findIndex((c) => /^기호$/.test(c));
     for (const row of t.rows) {
       const name = (row[0] ?? "").replace(/\s+/g, " ").trim();
-      if (!name || name.length > 80 || spec.rates.some((r) => r.name === name)) continue;
+      if (!name || name.length > 80) continue;
       // 이름이 "주계약 · 암발생률" 처럼 계약 단위를 달고 있으면 유형 판정은 뒤쪽만 본다
       const bare = name.includes(" · ") ? name.slice(name.lastIndexOf(" · ") + 3) : name;
       const role = (roleCol >= 0 ? ROLE_BY_LABEL.get((row[roleCol] ?? "").trim()) : undefined) ?? roleOf(bare);
       if (role === "lapse") continue;
       const src = srcCol >= 0 ? (row[srcCol] ?? "").trim() : "";
-      spec.rates.push({ id: `r${spec.rates.length + 1}`, name, role, source: src || undefined });
+      const sym = idCol >= 0 ? (row[idCol] ?? "").trim() : "";
+      const already = spec.rates.find((r) => r.name === name);
+      // 표가 가장 정확하다 — 본문에서 이름만 먼저 주운 계열도 기호·유형을 표대로 맞춘다
+      if (already) {
+        if (sym && sym !== "—" && !spec.rates.some((r) => r !== already && r.id === sym)) already.id = sym;
+        if (roleCol >= 0) already.role = role;
+        if (srcCol >= 0) already.source = src && src !== "—" ? src : undefined;
+        continue;
+      }
+      const id = sym && sym !== "—" && !spec.rates.some((r) => r.id === sym) ? sym : `r${spec.rates.length + 1}`;
+      spec.rates.push({ id, name, role, source: src && src !== "—" ? src : undefined });
       evidence.push({ path: `rates[${spec.rates.length - 1}]`, label: "위험률", value: name,
         raw: row.filter(Boolean).join(" | ").slice(0, 140), source: `표 ${ti + 1}`, confidence: "high" });
     }
@@ -300,8 +320,21 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     }
   }
 
-  // 4) 원문 절 보존 — 모델에 자리가 없는 내용을 잃지 않게
-  spec.sections = outlineSections(doc);
+  // 4) 원문 절 보존 — 모델에 자리가 없는 내용을 잃지 않게. 표준 양식은 정해진 순서대로 수식·주석·절을 읽는다
+  if (standard) {
+    for (const [k, path] of [["회사", "meta.insurer"], ["판", "meta.version"], ["비고", "meta.note"], ["작성일", "meta.date"]] as const) {
+      const v = cover(new RegExp(`^${k}$`));
+      if (v) add(path, k, v[0], `${k} ${v[0]}`, `표 ${v[1] + 1}`, "high");
+    }
+    readStandard(paragraphs, spec, evidence);
+    // 1.4 의 문장이 납입면제 여부다 — 위험률 목록에 납입면제 계열이 있어도 쓰지 않을 수 있다
+    const w = paragraphs.find((p) => /(납입만 면제되어 더 준다|납입면제를 적용하나|별도의 납입면제율을 두지 않는다)/.test(p));
+    if (w) {
+      const i = evidence.findIndex((e) => e.path === "basis.waiver");
+      if (i >= 0) evidence.splice(i, 1);
+      add("basis.waiver", "납입면제", !/두지 않는다/.test(w), w.slice(0, 120), "표준 양식 1.4", "high");
+    }
+  } else spec.sections = outlineSections(doc);
 
   const missing = ["meta.productName", "basis.interest", "contract.payYears"]
     .filter((p) => !evidence.some((e) => e.path === p))
@@ -309,12 +342,92 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
   if (!spec.expenses.length) missing.push("사업비");
   if (!spec.rates.length) missing.push("위험률");
 
-  return { spec, evidence, missing, warnings: [...new Set([...warnings, ...validateSpec(spec)])] };
+  return { spec, evidence, missing, warnings: [...new Set([...warnings, ...validateSpec(spec)])], ...(standard ? { format } : {}) };
 }
 
 type Add = (path: string, label: string, value: string | number | boolean, raw: string, source: string, confidence: Confidence, setValue?: boolean) => void;
 
 const numIn = (s: string) => { const m = /(-?[\d,]+(?:\.\d+)?)/.exec(s); return m ? n(m[1]) : null; };
+
+/** 식 비교용 — 빈칸·중괄호·표기 차이(LaTeX 를 거쳐 온 ′ − ₅ 등)를 지운다 */
+const normFormula = (s: string) => s
+  .replace(/[₀-₉]/g, (c) => `_${c.charCodeAt(0) - 0x2080}`).replace(/[\s{}]/g, "")
+  .replace(/'/g, "′").replace(/-/g, "−").replace(/∗/g, "*").replace(/≦/g, "≤").replace(/≧/g, "≥");
+
+/**
+ * 표준 산출방법서(STANDARD_FORMAT)의 문단을 순서대로 읽는다. 표는 앞에서 이미 읽었다.
+ *  - "N. 제목"            절. 기초율·계약 단위 절은 표로 읽었으므로 넘기고, 모르는 절은 원문 절(sections)로 둔다
+ *  - "[식] 제목" + 식 줄  그 절의 수식. "※ …" 가 설명이다. 자동으로 만든 식과 같으면 싣지 않는다(고친 식·새 식만)
+ *  - 책임준비금·해지환급금 관련 사항 절의 글  reserve.notes · surrender.notes (해약공제 기간 포함)
+ *  - "※ 담보: 연령 구간 배수 40~59세 1배 · …" / "생존급부 …"  담보의 steps · points
+ */
+function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence[]) {
+  type Kind = "known" | "reserve" | "surrender" | "other";
+  type Read = FormulaSpec & { lines: string[] };
+  const TOP = /^\d+\.\s*(\S.*)$/;
+  const read: Read[] = [];
+  const extras: ExtraSection[] = [], reserve: string[] = [], surrender: string[] = [];
+  let kind: Kind = "known", title = "", extra: ExtraSection | null = null;
+  let cur: Read | null = null;
+  const flush = () => { if (cur?.lines.length) read.push(cur); cur = null; };
+  for (const raw of paragraphs) {
+    const t = raw.trim();
+    if (!t || /^```/.test(t)) continue;
+    const top = !/^\d+\.\d/.test(t) && t.length < 60 ? TOP.exec(t) : null;
+    if (top) {
+      flush();
+      title = top[1].trim();
+      kind = /^(기초율에 관한 사항|계약 단위와 급부)$/.test(title) ? "known"
+        : /^책임준비금 관련 사항$/.test(title) ? "reserve" : /^해지환급금 관련 사항$/.test(title) ? "surrender" : "other";
+      extra = kind === "other" ? { title, paragraphs: [] } : null;
+      if (extra) extras.push(extra);
+      continue;
+    }
+    if (t.startsWith(FORMULA_MARK)) {
+      flush();
+      if (extra) { extras.splice(extras.indexOf(extra), 1); extra = null; }   // 식이 있는 절은 수식 절이다
+      cur = { section: title || "기타", label: t.slice(FORMULA_MARK.length).trim(), text: "", lines: [] };
+      continue;
+    }
+    const note = t.startsWith(NOTE_MARK) ? t.slice(NOTE_MARK.length).trim() : null;
+    if (cur) {
+      if (note !== null) { cur.note = cur.note ? `${cur.note} ${note}` : note; continue; }
+      if (!cur.note) { cur.lines.push(t); continue; }
+      flush();                                   // 설명 다음 글은 식이 아니다
+    }
+    const body = note ?? t;
+    if (kind === "reserve") reserve.push(body);
+    else if (kind === "surrender") {
+      const dy = /해약공제는\s*납입기간과\s*(\d+)\s*년\s*중/.exec(body);
+      if (dy) spec.surrender.deductionYears = Number(dy[1]);
+      else surrender.push(body);
+    } else if (extra) extra.paragraphs.push(t);
+    else if (note !== null) {
+      const m = /^(.+?):\s*(연령 구간 배수|생존급부)\s+(.+)$/.exec(note);
+      const b = m ? spec.benefits.find((x) => x.name === m[1].trim()) : undefined;
+      if (m && b && m[2] === "연령 구간 배수") {
+        b.steps = [...m[3].matchAll(/(\d+)\s*~\s*(\d+)\s*세\s*([\d.]+)\s*배/g)].map((x) => ({ fromAge: +x[1], toAge: +x[2], multiple: +x[3] }));
+      } else if (m && b) b.points = [...m[3].matchAll(/(\d+)\s*세\s*([\d.]+)\s*배/g)].map((x) => ({ age: +x[1], multiple: +x[2] }));
+    }
+  }
+  flush();
+  spec.reserve.notes = reserve;
+  spec.surrender.notes = surrender;
+  spec.sections = extras.filter((s) => s.paragraphs.length);
+  // 자동으로 만든 식(조건에서 늘 다시 만든다)과 같은 것은 빼고, 고친 식·새 식만 조건의 식으로 둔다
+  const auto = generateFormulas(spec);
+  const same = (a?: string, b?: string) => normFormula(a ?? "") === normFormula(b ?? "");
+  spec.formulas = read.filter((f) => {
+    const a = auto.find((x) => x.section === f.section && x.label === f.label);
+    return !a || !same(a.text, f.lines.join("\n")) || !same(a.note, f.note);
+  }).map(({ lines, ...f }) => ({ ...f, text: lines.join("\n") }));
+  const push = (path: string, label: string, value: string) =>
+    evidence.push({ path, label, value, raw: value, source: "표준 양식", confidence: "high" });
+  push("formulas", "수식", `읽은 식 ${read.length}개 · 조건에 둘 식 ${spec.formulas.length}개`);
+  push("reserve", "책임준비금 관련 사항", `${reserve.length}줄`);
+  push("surrender", "해지환급금 관련 사항", `${surrender.length}줄${spec.surrender.deductionYears ? ` · 해약공제 ${spec.surrender.deductionYears}년` : ""}`);
+  push("sections", "원문 절", `${spec.sections.length}개`);
+}
 
 /**
  * 가입 조건 표 두 가지를 읽어 spec.product 로 둔다. 읽은 표의 번호를 돌려준다(본문 규칙에서 뺄 것).
@@ -413,6 +526,7 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
     const col = (re: RegExp) => h.findIndex((c) => re.test(c));
     const cName = col(/^담보$/), cRole = col(/^급부유형$/), cAmt = col(/^보장금액$/);
     if (cName < 0 || cRole < 0 || cAmt < 0) return;
+    const multi = doc.tables.some((x) => squeeze(x.head.join("")).includes("주계약과다른조건"));
     const cUnit = col(/^단위$/), cTrig = col(/^지급사유$/), cEnd = col(/^보장종료$/), cWait = col(/^면책$/), cEv = col(/^급부위험률$/), cExit = col(/^탈퇴위험률$/);
     t.rows.forEach((r) => {
       const get = (c: number) => (c >= 0 ? (r[c] ?? "").trim() : "");
@@ -423,7 +537,7 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
       const ev = get(cEv), exits = get(cExit);
       const b: BenefitSpec = {
         id: `b${spec.benefits.length + 1}`, name, role,
-        ...(get(cUnit) ? { unit: get(cUnit) } : {}),
+        ...(get(cUnit) && !(get(cUnit) === "주계약" && !multi) ? { unit: get(cUnit) } : {}),
         ...(get(cTrig) && get(cTrig) !== "—" ? { trigger: get(cTrig) } : {}),
       };
       const amt = numIn(get(cAmt));
@@ -450,6 +564,7 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
 function readExpenseTable(t: DocTable, ti: number, spec: MethodSpec, add: Add) {
   const head = squeeze(t.head.join(" "));
   const headLooks = /(적용\s*사업비|사업비율|비\s*율|비율)/.test(head) && /(구\s*분|기\s*준|적용\s*기준)/.test(head);
+  const exact = t.head.map((c) => squeeze(c).replace(/\s/g, "")).join("|") === "구분|기호|기준|적용사업비율";
   for (const row of [t.head, ...t.rows]) {
     const cells = row.map((c) => c.replace(/\s+/g, " ").trim()).filter(Boolean);
     if (cells.length < 2) continue;
@@ -464,8 +579,11 @@ function readExpenseTable(t: DocTable, ti: number, spec: MethodSpec, add: Add) {
     const rate = picked?.value ?? null, raw = picked?.raw ?? last;
     // 기준은 앞 칸에서 찾고, 없으면 값이 들어 있던 문장에서 숫자를 뺀 부분을 쓴다
     const tidy = (x: string) => x.replace(/\s+/g, " ").replace(/^[가-힣]\s*[).]\s*/, "").trim().slice(0, 40);
-    const basis = tidy(cells.slice(0, -1).reverse().find(isBasis)
-      ?? (isBasis(last) ? last.replace(RATE_TOKEN, "").replace(/[의:：]\s*$/, "") : ""));
+    const cap = MIN_CAP.exec(joined);
+    // "× MIN(보험기간, 20)" 은 배수에 녹이므로 기준 문구에서 뺀다
+    const rawBasis = cells.slice(0, -1).reverse().find(isBasis)
+      ?? (isBasis(last) ? last.replace(RATE_TOKEN, "").replace(/[의:：]\s*$/, "") : "");
+    const basis = tidy(cap ? rawBasis.replace(/\s*[×x*]?\s*MIN\s*\([^)]*\)/i, "").replace(/[의:：]\s*$/, "") : rawBasis);
     const explicit = cells.find((c) => SYMBOL_CELL.test(c.replace(/\s/g, "")))?.replace(/\s/g, "");
     const g = GREEK.exec(flat);
     // 병합 셀이 많은 PDF 는 엉뚱한 칸이 첫 칸으로 오기도 한다 — 길거나 문장이면 그냥 "사업비"
@@ -478,9 +596,18 @@ function readExpenseTable(t: DocTable, ti: number, spec: MethodSpec, add: Add) {
       basis, phase: /납입\s*후/.test(joined) ? "납입후" : /납입\s*중/.test(joined) ? "납입중" : hit?.phase,
       raw,
     };
-    if (isAnnualNet(basis) && rate !== null) item.times = rate;   // "15%" 가 기준연납순보험료 기준이면 배수로 본다
+    // "15%" 가 기준연납순보험료 기준이면 배수로 본다. "× MIN(보험기간, 20)" 이 붙으면 20년치 배수(12% → 2.4배)
+    if (isAnnualNet(basis) && rate !== null) item.times = cap ? Math.round(rate * Number(cap[1]) * 1e10) / 1e10 : rate;
     else if (times !== null) item.times = times;
     else if (rate !== null) item.rate = rate;
+    if (exact) {
+      const [g, sym, b] = row.map((c) => c.replace(/\s+/g, " ").trim());
+      const gm = /^(.+?) \(([^()]+)\)$/.exec(g ?? "");
+      item.group = gm ? gm[1] : g || item.group;
+      item.phase = gm ? gm[2] : undefined;
+      item.symbol = sym && sym !== "—" ? sym : "";
+      item.basis = b ?? "";
+    }
     // 같은 표가 상품별로 여러 번 실리는 문서가 있다 — 같은 항목은 한 번만
     if (spec.expenses.some((e) => e.group === item.group && e.basis === item.basis && e.raw === item.raw && e.phase === item.phase)) continue;
     spec.expenses.push(item);

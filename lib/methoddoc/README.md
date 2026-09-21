@@ -3,16 +3,36 @@
 **앱에 딸리지 않는 독립 모듈.** 다른 앱에 옮길 때는 이 폴더를 통째로 복사하고 어댑터만 새로 쓰면 된다.
 
 > **원본은 `Life_ins_Doc_Convert_Studio/lib/methoddoc`** 이고 `flexible_insurance/lib/methoddoc` 은 복사본이다.
-> 고칠 때는 원본을 고친 뒤 폴더째 복사하고 두 앱의 시험을 모두 돌린다. 마지막으로 맞춘 날: 2026-09-21 (파일 9개 모두 같음 — 가입 조건 product 추가 후).
+> 고칠 때는 원본을 고친 뒤 폴더째 복사하고 두 앱의 시험을 모두 돌린다. 마지막으로 맞춘 날: 2026-09-21 (파일 11개 모두 같음 — 표준 산출방법서 v1 · docx.ts · vision.ts 추가 후).
 
 ```
-문서(.docx .hwp .hwpx .xlsx .txt .tex .md)
-   ↓ extract.ts · tex.ts  파일 → 문단 + 표
-   ↓ parse.ts             표 먼저 → 본문 규칙 → (선택) llm.ts
+문서(.docx .hwp .hwpx .xlsx .txt .tex .md)   스캔 PDF · 그림
+   ↓ extract.ts · tex.ts  파일 → 문단 + 표      ↓ vision.ts  쪽 그림 → (호출자의 ask) → 옮겨 적은 문단 + 표
+   ↓ parse.ts             표 먼저 → 본문 규칙 → 표준 양식이면 [식]·※·절까지 → (선택) llm.ts
 MethodSpec  ←─ adapter ──  앱의 입력 조건 (위험률 값 표는 RateRef.table)
-   ↓ formulas.ts · render.ts · tex.ts
-산출방법서 (화면 · Markdown · HTML · LaTeX)
+   ↓ formulas.ts · render.ts · tex.ts · docx.ts
+산출방법서 = 표준 산출방법서 v1 (화면 · Markdown · HTML · LaTeX · Word)
 ```
+
+### 표준 산출방법서 v1
+
+이 모듈이 내는 산출방법서의 모양이 곧 **표준 산출방법서**다(`render.ts` 의 `STANDARD_FORMAT`). 개요 표의 `양식 | 표준 산출방법서 v1` 행이 표시이고,
+`parse.ts` 는 이 행을 보면 정해진 순서대로 더 읽는다(`readStandard`).
+
+| 자리 | 읽는 것 |
+|---|---|
+| 개요 표 `항목 \| 내용` | 상품명 · 회사 · 종류 · 작성일 · 판 · 비고 |
+| `위험률 \| 기호 \| 유형 \| 근거·출처 \| 표` | 기호 칸이 위험률 id — 담보가 가리키는 id 가 그대로 돌아온다 |
+| `구분 \| 기호 \| 기준 \| 적용사업비율` | 칸대로 — `계약체결비용 (초년도)` 의 괄호가 phase |
+| `[식] 제목` + 식 줄 + `※ 설명` | 그 절(`N. 제목`)의 수식. 자동 식과 같으면 싣지 않고 고친 식·새 식만 `formulas` 로 |
+| `N. 책임준비금 관련 사항` · `N. 해지환급금 관련 사항` | `reserve.notes` · `surrender.notes` · 해약공제 기간 |
+| 그 밖의 `N. 제목` 절 | `sections` (원문 절 보존) |
+| `※ 담보: 연령 구간 배수 …` / `생존급부 …` | 담보의 `steps` · `points` |
+| 맨 앞 `작성 안내` 표 | 읽지 않는다 |
+
+`[식]`·`※` 표시는 편집용 내보내기(Word·Markdown·LaTeX)에만 붙고 화면·HTML 에는 없다(`kind: "label"`).
+Word·한글의 수식 편집기로 넣은 식(OMML · `hp:script`)과 글자 서식 첨자는 `extract.ts` 가 평문 표기(`l_{x+t}`)로 바꾼다.
+양식을 바꾸면 판을 올리고(v2) parse 가 옛 판도 읽게 둔다.
 
 가운데의 **MethodSpec**(`spec.ts`)이 유일한 계약이다. 양방향 모두 이 형식을 거친다.
 `contract` 는 산출에 쓰는 시산 기준 한 점이고, `product`(선택)는 산출방법서 개요에 싣는 가입 조건(판매 범위 — 보험기간·납입기간·가입나이 표 등)이다.
@@ -30,6 +50,8 @@ MethodSpec  ←─ adapter ──  앱의 입력 조건 (위험률 값 표는 Ra
 | `llm.ts` | 규칙이 못 찾은 항목만 LLM 에 묻는 선택 경로. `ask` 를 안 넘기면 꺼짐 | 없음 |
 | `formulas.ts` | MethodSpec → 산출식(유지자수·납입자수 `1 − Σd + Σdᵢdⱼ/2` · 계산기수 · 보험료 · 준비금 · 해지환급금) | `spec.ts` 만 |
 | `tex.ts` | 평문 수식 → LaTeX(KaTeX 공용), 산출방법서 ↔ `.tex` | 이 폴더 안만 |
+| `docx.ts` | 산출방법서 블록 → Word(.docx). 압축 없는 ZIP 을 직접 쓴다(`zipStore`) — 한글에서 열어 HWPX 로 저장된다 | 이 폴더 안만 |
+| `vision.ts` | 스캔 PDF·그림 → 문단·표. 모델은 옮겨 적기만(`PAGE_SCHEMA` · `VISION_SYSTEM`), 조건은 `parse.ts` 가. 호출은 `VisionAsk` 로 주입 | 이 폴더 안만 |
 
 ## 다른 앱에 붙이는 법
 
@@ -45,15 +67,16 @@ MethodSpec  ←─ adapter ──  앱의 입력 조건 (위험률 값 표는 Ra
 
 | 형식 | 상태 |
 |---|---|
-| DOCX | 문단 + 표 (가장 정확) |
+| DOCX | 문단 + 표 (가장 정확) + Word 수식(OMML)·서식 첨자 → 평문 표기 |
 | HWP 5.x | 문단. 표는 아직 미지원, 수식 객체는 `[수식]` 자리표시자 |
-| HWPX | 문단 + 표 |
+| HWPX | 문단 + 표 + 한글 수식 편집기 식(`hp:script` → 평문 표기) |
 | XLSX·CSV·TXT | 표·줄 |
 | Markdown | 줄 + 파이프 표(`\| a \| b \|`). 이 모듈이 낸 산출방법서를 그대로 되읽을 수 있다 |
 | PDF (글자 레이어 있음) | 문단 + 표. 표는 글자 좌표로 되살린다(병합 셀이 많으면 줄로만). 브라우저는 `public/pdf.worker.min.mjs` 필요 |
-| 스캔 PDF·구형 HWP·DRM 파일 | **읽지 못함** — `ExtractError.why` 로 이유를 알려준다 |
+| 스캔 PDF·그림 | `extract` 는 `ExtractError.why = "scanned"`. 호출자가 쪽 그림을 만들어 `vision.ts` 의 `transcribe(images, ask)` 로 옮겨 적으면 같은 규칙으로 읽힌다 |
+| 구형 HWP·DRM 파일 | **읽지 못함** — `ExtractError.why` 로 이유를 알려준다 |
 
-- **수식은 뽑지 않는다.** 산출방법서의 수식은 HWP 수식객체·이미지다. 기호·산식은 앱 쪽 정의를 쓴다.
+- **수식은 표준 양식에서만 읽는다.** 일반 산출방법서의 수식(HWP 수식객체·이미지)은 뽑지 않고 앱 쪽 정의를 쓴다. 표준 산출방법서의 `[식]` 은 읽는다.
 - **자동 적용하지 않는다.** 모든 값은 Evidence(원문·출처·확신도)를 달고 나오며, 사람이 고른 것만 반영한다.
 - 확신도: `high` 표에서 직접 · `medium` 본문 규칙 · `low` AI 추정(기본 미적용).
 

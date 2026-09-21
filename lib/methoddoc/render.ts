@@ -10,7 +10,8 @@ import { hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type Pr
  * 편집기는 이 경로로 조건 줄 ↔ 산출방법서 블록을 서로 짝짓는다.
  */
 export type DocBlock =
-  | { t: "p"; text: string; path?: string }
+  /** kind "label" = 수식 제목. 편집용 내보내기(Word·Markdown·LaTeX)는 앞에 "[식]" 을 붙여 되읽을 때 식의 시작을 안다 */
+  | { t: "p"; text: string; path?: string; kind?: "label" }
   | { t: "formula"; text: string; path?: string }
   | { t: "note"; text: string; path?: string }
   | { t: "table"; head: string[]; rows: (string | number)[][]; rowPaths?: (string | undefined)[] };
@@ -19,6 +20,13 @@ export interface DocSection { id: string; title: string; blocks: DocBlock[] }
 const pctOf = (x?: number, d = 3) => (x === undefined ? "—" : `${(x * 100).toFixed(d)}%`);
 const wonOf = (x?: number) => (x === undefined ? "—" : `${Math.round(x).toLocaleString("ko-KR")}원`);
 const yearsOf = (y?: number, a?: number) => (y ? `${y}년` : a ? `${a}세 만기` : "—");
+
+/**
+ * 표준 산출방법서 — 이 모듈이 내는 산출방법서의 모양 자체다. 개요 표의 "양식" 행이 표시이고,
+ * parse 는 이 표시를 보면 수식·주석·절까지 정해진 순서대로 되읽는다(parseStandard).
+ * 모양을 바꾸면 판(v2 …)을 올리고 parse 가 옛 판도 읽게 둔다.
+ */
+export const STANDARD_FORMAT = "표준 산출방법서 v1";
 
 /** 사업비 한 줄의 비율 표기 — 원문이 있으면 원문을, 없으면 정규화 값을 쓴다 */
 export function expenseRate(e: ExpenseItem): string {
@@ -36,6 +44,7 @@ function table(head: string[], pairs: [(string | number)[], string | undefined][
 export interface RenderOptions {
   /** 산출 결과(연도별 표·검증)를 같이 실을 때 */
   extra?: DocSection[];
+  /** 작성일이 비어 있을 때 찍을 날짜(인쇄용). 넘기지 않으면 작성일 행을 싣지 않는다 */
   today?: Date;
 }
 
@@ -64,21 +73,23 @@ function productBlocks(p: ProductInfo): DocBlock[] {
 
 /** 산출방법서 본문 */
 export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocSection[] {
-  const today = opt.today ?? new Date();
+  // 작성일은 조건에 적힌 것만 싣는다. today 를 넘기면(인쇄용) 비어 있을 때 그 날짜를 쓴다 — 되읽을 때 조건이 아닌 날짜가 섞이지 않게
+  const date = spec.meta.date || opt.today?.toLocaleDateString("ko-KR");
   const out: DocSection[] = [];
   const rateName = (id?: string) => spec.rates.find((r) => r.id === id)?.name ?? "—";
 
   // 0. 표지
   out.push({ id: "cover", title: "개요", blocks: [
     table(["항목", "내용"], [
+      [["양식", STANDARD_FORMAT], undefined],
       [["상품명", spec.meta.productName || "(이름 없음)"], "meta.productName"],
       ...(spec.meta.insurer ? [[["회사", spec.meta.insurer], "meta.insurer"] as [string[], string]] : []),
       ...(spec.meta.kind ? [[["종류", spec.meta.kind], "meta.kind"] as [string[], string]] : []),
-      [["작성일", spec.meta.date || today.toLocaleDateString("ko-KR")], "meta.date"],
+      ...(date ? [[["작성일", date], "meta.date"] as [string[], string]] : []),
       ...(spec.meta.version ? [[["판", spec.meta.version], "meta.version"] as [string[], string]] : []),
       [["계약 단위", spec.units.length ? spec.units.map((u) => u.name).join(" · ") : "주계약"], "units"],
+      ...(spec.meta.note ? [[["비고", spec.meta.note], "meta.note"] as [string[], string]] : []),
     ]),
-    ...(spec.meta.note ? [{ t: "note" as const, text: spec.meta.note, path: "meta.note" }] : []),
     ...(hasProduct(spec.product) ? productBlocks(spec.product) : []),
   ] });
 
@@ -95,8 +106,9 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     { t: "p", text: "1.2. 위험률에 관한 사항", path: "rates" },
   ];
   if (spec.rates.length) {
-    basisBlocks.push(table(["위험률", "유형", "근거·출처", "표"], spec.rates.map((r, i) => [[
+    basisBlocks.push(table(["위험률", "기호", "유형", "근거·출처", "표"], spec.rates.map((r, i) => [[
       r.name + (r.adjustment ? ` ${r.adjustment}` : ""),
+      r.id,
       RATE_ROLE_LABEL[r.role],
       r.source ?? "—",
       r.table ? `${r.table.ages[0]}~${r.table.ages[r.table.ages.length - 1]}세 ${r.table.ages.length}행` : "별첨",
@@ -177,7 +189,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   for (const [section, list] of bySection) {
     const blocks: DocBlock[] = [];
     for (const f of list) {
-      blocks.push({ t: "p", text: f.label, path: f.path });
+      blocks.push({ t: "p", text: f.label, path: f.path, kind: "label" });
       blocks.push({ t: "formula", text: f.text, path: f.path });
       if (f.note) blocks.push({ t: "note", text: f.note, path: f.path });
     }
@@ -204,6 +216,10 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   return out;
 }
 
+/** 편집용 내보내기(Word·Markdown·LaTeX)의 표시 — 수식 제목 앞 "[식]", 주석 앞 "※". 되읽을 때 식·주석의 경계가 된다 */
+export const FORMULA_MARK = "[식]";
+export const NOTE_MARK = "※";
+
 /** 블록 → Markdown */
 export function docToMarkdown(sections: DocSection[], title?: string): string {
   const esc = (v: string | number) => String(v).replace(/\|/g, "\\|").replace(/\n/g, " ");
@@ -212,8 +228,8 @@ export function docToMarkdown(sections: DocSection[], title?: string): string {
   for (const sec of sections) {
     lines.push(`## ${sec.title}`, "");
     for (const b of sec.blocks) {
-      if (b.t === "p") lines.push(b.text, "");
-      else if (b.t === "note") lines.push(`> ${b.text}`, "");
+      if (b.t === "p") lines.push(b.kind === "label" ? `${FORMULA_MARK} ${b.text}` : b.text, "");
+      else if (b.t === "note") lines.push(`> ${NOTE_MARK} ${b.text}`, "");
       else if (b.t === "formula") lines.push("```", b.text, "```", "");
       else {
         lines.push(`| ${b.head.map(esc).join(" | ")} |`, `|${b.head.map(() => "---").join("|")}|`);

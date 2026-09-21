@@ -16,7 +16,7 @@ interface Item { str: string; x: number; y: number; w: number; h: number }
 /** 표로 보기 위한 최소 열 수·줄 수 */
 const MIN_COLS = 2, MIN_ROWS = 2;
 
-/** 브라우저에서는 워커 경로가 있어야 한다. public/ 으로 복사해 둔 파일을 가리킨다(scripts/copy-pdf-worker.mjs).
+/** 브라우저에서는 워커 경로가 있어야 한다. public/ 으로 복사해 둔 파일을 가리킨다(각 앱의 predev·prebuild 스크립트가 복사).
  *  Node(테스트)에서는 pdfjs 가 워커 파일을 직접 불러오므로 건드리지 않는다. */
 export const PDF_WORKER_SRC = "/pdf.worker.min.mjs";
 

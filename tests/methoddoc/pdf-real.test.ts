@@ -38,8 +38,8 @@ const CASES: Case[] = [
     extra: (r) => {
       // α1·α2·β1 기호가 그대로 남아야 한다 (표에 기호로만 적힌 문서)
       expect(r.spec.expenses.map((e) => e.symbol)).toEqual(expect.arrayContaining(["α1", "α2", "β1"]));
-      // 기준연납순보험료 기준은 비율이 아니라 배수로 담는다
-      expect(r.spec.expenses.find((e) => /기준연납순보험료/.test(e.basis))?.times).toBeCloseTo(0.035, 12);
+      // 기준연납순보험료 기준은 비율이 아니라 배수로 담는다 — "3.50%×Min(보험기간, 20년)" 은 20년치 0.7배
+      expect(r.spec.expenses.find((e) => /기준연납순보험료/.test(e.basis))?.times).toBeCloseTo(0.7, 12);
     } },
   { key: "교보CI종신", dir: "교보 CI종신", file: "무배당교보CI종신보험 산출방법서", productName: "07.무배당교보CI종신보험 산출방법서",
     interest: 0.04, expenses: 1, rates: ["무배당 예정 사망률"],
