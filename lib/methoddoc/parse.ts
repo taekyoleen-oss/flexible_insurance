@@ -1,5 +1,5 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { emptySpec, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type Evidence, type ExpenseItem, type MethodSpec, type ParseResult, type RateRef, type RateRole } from "./spec";
+import { emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole } from "./spec";
 
 /**
  * 산출방법서 → MethodSpec. 규칙(표 먼저, 본문 다음)만으로 돌아간다 — LLM 은 선택이다.
@@ -174,6 +174,12 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     if (setValue) set(spec as unknown as Record<string, unknown>, path, value);
   };
 
+  // 0-0) 가입 조건 표(판매 범위: 보험기간·납입기간·가입나이 목록)를 먼저 떼어 낸다.
+  //      이 표의 "110세만기 · 만15세" 를 본문 규칙이 계약(시산 기준 한 점)으로 읽지 않게, 그 줄들은 아래 규칙에서 지운다.
+  const productTables = readProduct(doc, spec, evidence);
+  const productRows = new Set([...productTables].flatMap((ti) => [doc.tables[ti].head, ...doc.tables[ti].rows].map((r) => squeeze(r.filter(Boolean).join(" ")))));
+  const paragraphs = doc.paragraphs.map((p) => (productRows.has(squeeze(p)) ? "" : p));
+
   // 0) 상품명 — 표지 문단. 수식·항목 제목이 걸리지 않게 거른다
   const NOT_TITLE = /([%％]|에\s*관한\s*사항|계산|산출|별첨|목차|제\s*\d+\s*조|순보험료|영업보험료|기준|비율)/;
   const ok = (p: string) => p.trim().length >= 4 && p.length < 40 && !/산출방법서/.test(p) && !NOT_TITLE.test(p);
@@ -187,9 +193,9 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     if (t.split(/\s+/).length > 5) return false;
     return !/\d/.test(t) || /^\(?무\)?배당|^\(무\)/.test(t);
   };
-  const title = doc.paragraphs.find((p) => NAME_LIKE(p) && ok(p))
+  const title = paragraphs.find((p) => NAME_LIKE(p) && ok(p))
     ?? opt.fallbackName
-    ?? doc.paragraphs.find((p) => /(보험|공제)/.test(p) && ok(p))
+    ?? paragraphs.find((p) => /(보험|공제)/.test(p) && ok(p))
     ?? doc.paragraphs[0];
   // 표지 표에 "상품명 | …", "종류 | …" 행이 있으면 그것이 가장 정확하다
   const cover = (label: RegExp): [string, number] | undefined => {
@@ -201,21 +207,22 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
   if (coverName) add("meta.productName", "상품명", coverName[0], `상품명 ${coverName[0]}`, `표 ${coverName[1] + 1}`, "high");
   if (title) add("meta.productName", "상품명", title, title, "표지", "medium");
   if (coverKind) add("meta.kind", "종류", coverKind[0], `종류 ${coverKind[0]}`, `표 ${coverKind[1] + 1}`, "high");
-  const kindLine = doc.paragraphs.find((p) => LOW_KIND.test(p));
+  const kindLine = paragraphs.find((p) => LOW_KIND.test(p));
   if (kindLine) add("meta.kind", "종류", LOW_KIND.exec(kindLine)![0], kindLine, "본문", "medium");
 
   // 1) 표 먼저 — 적중률이 가장 높다
   doc.tables.forEach((t, ti) => {
+    if (productTables.has(ti)) return;
     readExpenseTable(t, ti, spec, add);
     readBasisTable(t, ti, add, spec);
   });
 
   // 2) 본문 규칙
-  scanLines(doc.paragraphs, (li) => `본문 ${li + 1}줄`, "medium", spec, add);
+  scanLines(paragraphs, (li) => `본문 ${li + 1}줄`, "medium", spec, add);
 
   // 3) 위험률 — "○ …률" 목록과 "…를 사용함" 문구
-  for (const [li, line] of doc.paragraphs.entries()) {
-    if (continuation(doc.paragraphs[li - 1])) continue;          // 앞 줄에서 잘린 토막
+  for (const [li, line] of paragraphs.entries()) {
+    if (continuation(paragraphs[li - 1])) continue;          // 앞 줄에서 잘린 토막
     const body = line.replace(/^\s*(?:[가-힣]\s*[).]|\(\s*\d+\s*\)|\d+\s*[).])\s*/, "");   // "가. ", "나) ", "(1) " 머리표 제거
     const m = /^[○◦\-·•]?\s*([가-힣A-Za-z0-9()\s]*?(?:률|율|지급률))\s*(?:×\s*([^:]*))?[:：]?\s*(.*)$/.exec(body);
     if (!m) continue;
@@ -308,6 +315,66 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
 type Add = (path: string, label: string, value: string | number | boolean, raw: string, source: string, confidence: Confidence, setValue?: boolean) => void;
 
 const numIn = (s: string) => { const m = /(-?[\d,]+(?:\.\d+)?)/.exec(s); return m ? n(m[1]) : null; };
+
+/**
+ * 가입 조건 표 두 가지를 읽어 spec.product 로 둔다. 읽은 표의 번호를 돌려준다(본문 규칙에서 뺄 것).
+ *  - "가입 조건 | 내용": 보험의 종류 · 보험종목 · 보험료 납입주기 · 보험가입금액 한도 · 갱신
+ *  - "(구분 |) 보험기간 | 보험료 납입기간 | 가입나이 (| 납입주기)": 사업방법서의 판매 범위 표.
+ *    병합 칸이 비어 오면 위 행 값을 이어 쓴다(보험기간·구분·가입나이).
+ */
+function readProduct(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]): Set<number> {
+  const used = new Set<number>();
+  const p: ProductInfo = {};
+  const list = (v: string, sep: RegExp) => v.split(sep).map((x) => x.trim()).filter(Boolean);
+  let first = -1;
+  doc.tables.forEach((t, ti) => {
+    const head = t.head.map((c) => squeeze(c).replace(/\s+/g, ""));
+    const col = (re: RegExp) => head.findIndex((c) => re.test(c));
+    if (head.length === 2 && head[0] === "가입조건") {
+      used.add(ti); if (first < 0) first = ti;
+      for (const row of t.rows) {
+        const k = squeeze(row[0] ?? "").replace(/\s+/g, ""), v = (row[1] ?? "").trim();
+        if (!v || v === "—") continue;
+        if (/종류/.test(k)) p.category = v;
+        else if (/종목/.test(k)) p.types = list(v, /\s*[·,，]\s*/);
+        else if (/납입주기/.test(k)) p.payFreqs = list(v, /\s*[·,，/]\s*/);
+        else if (/한도|가입금액/.test(k)) p.sumLimit = v;
+        else if (/갱신/.test(k)) p.renewal = v;
+      }
+      return;
+    }
+    const cTerm = col(/^보험기간$/), cPay = col(/납입기간$/), cAge = col(/가입(나이|연령)/);
+    if (cTerm < 0 || cPay < 0 || cAge < 0) return;
+    used.add(ti); if (first < 0) first = ti;
+    const cAgeF = head.findIndex((c, i) => i !== cAge && /가입(나이|연령).*여/.test(c));
+    const cFreq = col(/납입주기/), cLabel = col(/^(구분|보장|담보|보장내용|형구분|종목)$/);
+    const rows: EntryRow[] = [];
+    let prev: EntryRow | undefined;
+    for (const r of t.rows) {
+      if (!r.some((c) => c.trim())) continue;
+      const cell = (c: number) => (c >= 0 ? (r[c] ?? "").trim() : "");
+      const get = (c: number) => (cell(c) === "—" ? "" : cell(c));
+      // 빈 칸은 병합(위 행과 같음), "—" 는 정말 비어 있음
+      const carry = (c: number, above?: string) => (c >= 0 && cell(c) === "" ? above ?? "" : get(c));
+      const label = cLabel >= 0 ? carry(cLabel, prev?.label) : "";
+      const row: EntryRow = {
+        ...(label ? { label } : {}),
+        term: carry(cTerm, prev?.term), pay: get(cPay), age: carry(cAge, prev?.age),
+        ...(cAgeF >= 0 && get(cAgeF) && get(cAgeF) !== get(cAge) ? { ageF: get(cAgeF) } : {}),
+      };
+      rows.push(row); prev = row;
+      if (cFreq >= 0 && get(cFreq)) p.payFreqs = [...new Set([...(p.payFreqs ?? []), ...list(get(cFreq), /\s*[·,，/]\s*/)])];
+    }
+    if (rows.length) p.terms = [...(p.terms ?? []), ...rows];
+  });
+  if (hasProduct(p)) {
+    spec.product = p;
+    evidence.push({ path: "product", label: "가입 조건", value: `${p.terms?.length ?? 0}행`,
+      raw: (p.terms ?? []).slice(0, 3).map((r) => `${r.term} ${r.pay} ${r.age}`).join(" / ").slice(0, 140) || (p.category ?? ""),
+      source: `표 ${first + 1}`, confidence: "high" });
+  }
+  return used;
+}
 
 /** "항목 | 내용" 계약 표: 피보험자 40세 남 · 보험기간 71년 · 납입주기 월납 · 보험가입금액 1억 */
 function readContractTable(doc: ExtractedDoc, add: Add) {

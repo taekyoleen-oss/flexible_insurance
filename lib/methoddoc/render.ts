@@ -1,4 +1,4 @@
-import { RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec } from "./spec";
+import { hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type ProductInfo } from "./spec";
 
 /**
  * MethodSpec → 산출방법서. 앱에 딸리지 않는다(import 는 spec 하나뿐).
@@ -39,6 +39,29 @@ export interface RenderOptions {
   today?: Date;
 }
 
+/**
+ * 가입 조건(정보) — 사업방법서의 "보험기간 | 보험료 납입기간 | 가입나이" 표와 종류·종목·납입주기·한도·갱신.
+ * 머리글을 "가입 조건 | 내용" 과 "보험기간 | …" 으로 둔다 — parse 가 이 두 표를 먼저 떼어 내 계약(시산 기준)과 섞지 않는다.
+ */
+function productBlocks(p: ProductInfo): DocBlock[] {
+  const out: DocBlock[] = [{ t: "p", text: "가입 조건", path: "product" }];
+  const info = ([
+    ["보험의 종류", p.category, "product.category"],
+    ["보험종목", p.types?.join(" · "), "product.types"],
+    ["보험료 납입주기", p.payFreqs?.join(" · "), "product.payFreqs"],
+    ["보험가입금액 한도", p.sumLimit, "product.sumLimit"],
+    ["갱신", p.renewal, "product.renewal"],
+  ] as const).filter(([, v]) => v);
+  if (info.length) out.push(table(["가입 조건", "내용"], info.map(([k, v, path]) => [[k, v!], path])));
+  if (p.terms?.length) {
+    const label = p.terms.some((r) => r.label), female = p.terms.some((r) => r.ageF);
+    out.push(table([...(label ? ["구분"] : []), "보험기간", "보험료 납입기간", female ? "가입나이(남)" : "가입나이", ...(female ? ["가입나이(여)"] : [])],
+      p.terms.map((r, i) => [[...(label ? [r.label ?? "—"] : []), r.term || "—", r.pay || "—", r.age || "—", ...(female ? [r.ageF || r.age || "—"] : [])], `product.terms[${i}]`])));
+  }
+  out.push({ t: "note", path: "product", text: "가입 조건은 판매 범위를 적은 정보이며, 보험료·책임준비금 예시는 2. 의 시산 기준으로 계산한다." });
+  return out;
+}
+
 /** 산출방법서 본문 */
 export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocSection[] {
   const today = opt.today ?? new Date();
@@ -56,6 +79,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       [["계약 단위", spec.units.length ? spec.units.map((u) => u.name).join(" · ") : "주계약"], "units"],
     ]),
     ...(spec.meta.note ? [{ t: "note" as const, text: spec.meta.note, path: "meta.note" }] : []),
+    ...(hasProduct(spec.product) ? productBlocks(spec.product) : []),
   ] });
 
   // 1. 기초율
@@ -131,6 +155,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     if (b.points?.length) unitBlocks.push({ t: "note", path: `benefits[${i}].points`, text: `${b.name}: 생존급부 ${b.points.map((x) => `${x.age}세 ${x.multiple}배`).join(" · ")}` });
   });
   out.push({ id: "units", title: "2. 계약 단위와 급부", blocks: [
+    { t: "p", path: "contract", text: "시산 기준 — 보험료·책임준비금 예시는 아래 계약으로 계산한다." },
     table(["항목", "내용"], [
       [["피보험자", `${spec.contract.age ?? "—"}세 ${spec.contract.sex === "F" ? "여" : spec.contract.sex === "M" ? "남" : ""}`], "contract.age|contract.sex"],
       [["보험기간", yearsOf(spec.contract.termYears, spec.contract.termAge)], "contract.termYears|contract.termAge"],

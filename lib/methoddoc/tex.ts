@@ -145,10 +145,11 @@ export function unTexMath(s: string): string {
 export function unTex(s: string): string {
   return s
     .replace(/\$([^$]*)\$/g, (_, m: string) => unTexMath(m))
-    .replace(/\\textbackslash\{\}/g, "\\").replace(/\\textasciitilde\{\}/g, "~").replace(/\\textasciicircum\{\}/g, "^")
+    // 글자 "~"(\textasciitilde{})는 LaTeX 의 붙임 빈칸 "~" 을 빈칸으로 바꾼 뒤에 되돌린다 — "만15세 ~ 65세" 가 살아남게
+    .replace(/\\textbackslash\{\}/g, "\\").replace(/\\textasciitilde\{\}/g, "\u0002").replace(/\\textasciicircum\{\}/g, "^")
     .replace(/\\(textbf|emph|textit|underline|small|large|footnotesize)\{([^{}]*)\}/g, "$2")
     .replace(/\\(small|large|footnotesize|centering|noindent)\b/g, "")
-    .replace(/\\([&%$#_{}])/g, "$1").replace(/~/g, " ")
+    .replace(/\\([&%$#_{}])/g, "$1").replace(/~/g, " ").replace(/\u0002/g, "~")
     .replace(/\s+/g, " ").trim();
 }
 

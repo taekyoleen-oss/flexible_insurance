@@ -126,6 +126,43 @@ export interface FormulaSpec {
   path?: string;
 }
 
+/** 가입 조건 한 줄 — 사업방법서·산출방법서의 "보험기간 | 보험료 납입기간 | 가입나이" 표 */
+export interface EntryRow {
+  /** 담보·종목 구분. 비우면 상품 전체 */
+  label?: string;
+  /** "80세만기", "20년만기", "종신" */
+  term: string;
+  /** "10·15·20년납", "전기납", "일시납" */
+  pay: string;
+  /** "만15세 ~ 65세", "만15세 ~ (80-납입기간)세". 남녀가 다르면 남자 */
+  age: string;
+  /** 여자 가입나이 — 남자와 다를 때만 */
+  ageF?: string;
+}
+
+/**
+ * 가입 조건 — 산출방법서에 싣는 정보성 자료(판매 범위). 원문 표기 그대로의 글자로 둔다.
+ * 보험료 산출에는 쓰지 않는다 — 산출은 contract 의 한 점(시산 기준: 가입나이·보험기간·납입기간 하나씩)으로 한다.
+ */
+export interface ProductInfo {
+  /** 보험의 종류 — "생명보험 / 종신", "장기손해보험 / 장기질병" */
+  category?: string;
+  /** 보험종목 — "1종(무해지환급형)", "2종(표준형)" */
+  types?: string[];
+  /** 보험기간·납입기간·가입나이 */
+  terms?: EntryRow[];
+  /** 보험료 납입주기 — "월납", "연납" … */
+  payFreqs?: string[];
+  /** 보험가입금액 한도 — "1천만원 ~ 10억원" */
+  sumLimit?: string;
+  /** 갱신 — "비갱신형", "10년 갱신 (최대 100세)" */
+  renewal?: string;
+}
+
+/** 가입 조건에 적힌 것이 있는지 */
+export const hasProduct = (p?: ProductInfo): p is ProductInfo =>
+  !!p && !!(p.category || p.types?.length || p.terms?.length || p.payFreqs?.length || p.sumLimit || p.renewal);
+
 export interface ExtraSection {
   /** "1. 보험료의 계산에 관한 사항" 같은 원문 제목 */
   title: string;
@@ -137,6 +174,9 @@ export interface ExtraSection {
 export interface MethodSpec {
   specVersion: string;
   meta: { productName: string; insurer?: string; version?: string; date?: string; note?: string; kind?: string };
+  /** 가입 조건(정보) — 없어도 된다. 예전 JSON 과 다른 앱은 이 칸을 모른다 */
+  product?: ProductInfo;
+  /** 시산 기준 — 보험료·책임준비금을 실제로 계산하는 계약 한 점 */
   contract: ContractSpec;
   basis: BasisSpec;
   rates: RateRef[];
