@@ -2,13 +2,16 @@
 
 **앱에 딸리지 않는 독립 모듈.** 다른 앱에 옮길 때는 이 폴더를 통째로 복사하고 어댑터만 새로 쓰면 된다.
 
+> **원본은 `Life_ins_Doc_Convert_Studio/lib/methoddoc`** 이고 `flexible_insurance/lib/methoddoc` 은 복사본이다.
+> 고칠 때는 원본을 고친 뒤 폴더째 복사하고 두 앱의 시험을 모두 돌린다. 마지막으로 맞춘 날: 2026-09-21 (파일 9개 모두 같음).
+
 ```
-문서(.docx .hwp .hwpx .xlsx .txt)
-   ↓ extract.ts          파일 → 문단 + 표
-   ↓ parse.ts            표 먼저 → 본문 규칙 → (선택) llm.ts
-MethodSpec  ←─ adapter ──  앱의 입력 조건
-   ↓ render.ts
-산출방법서 (화면 · Markdown · HTML)
+문서(.docx .hwp .hwpx .xlsx .txt .tex .md)
+   ↓ extract.ts · tex.ts  파일 → 문단 + 표
+   ↓ parse.ts             표 먼저 → 본문 규칙 → (선택) llm.ts
+MethodSpec  ←─ adapter ──  앱의 입력 조건 (위험률 값 표는 RateRef.table)
+   ↓ formulas.ts · render.ts · tex.ts
+산출방법서 (화면 · Markdown · HTML · LaTeX)
 ```
 
 가운데의 **MethodSpec**(`spec.ts`)이 유일한 계약이다. 양방향 모두 이 형식을 거친다.
@@ -23,13 +26,16 @@ MethodSpec  ←─ adapter ──  앱의 입력 조건
 | `pdf.ts` | PDF → 문단·표(좌표로 표 복원). 동적 import 라 다른 화면 번들에 안 들어간다 | `pdfjs-dist` |
 | `parse.ts` | 문단·표 → MethodSpec + Evidence. 동의어·단위 사전 포함 | `spec.ts` `extract.ts` |
 | `llm.ts` | 규칙이 못 찾은 항목만 LLM 에 묻는 선택 경로. `ask` 를 안 넘기면 꺼짐 | 없음 |
+| `formulas.ts` | MethodSpec → 산출식(유지자수·납입자수 `1 − Σd + Σdᵢdⱼ/2` · 계산기수 · 보험료 · 준비금 · 해지환급금) | `spec.ts` 만 |
+| `tex.ts` | 평문 수식 → LaTeX(KaTeX 공용), 산출방법서 ↔ `.tex` | 이 폴더 안만 |
 
 ## 다른 앱에 붙이는 법
 
 1. `lib/methoddoc/` 복사.
-2. 어댑터 두 개를 쓴다 (이 저장소의 `lib/plan-doc.ts`·`lib/methoddoc-bridge.ts` 참고).
-   - `appToSpec(state): MethodSpec` — 내보내기
-   - `applySpecToApp(spec, accepted: Evidence[]): number` — 들여오기. **검수에서 고른 것만** 반영한다.
+2. 어댑터를 쓴다 (flexible_insurance 의 `lib/plan-doc.ts`·`lib/methoddoc-bridge.ts` 참고).
+   - `appToSpec(state): MethodSpec` — 내보내기 (`planToSpec`)
+   - `applySpecToApp(spec, accepted: Evidence[]): number` — 문서에서 읽은 값 들여오기. **검수에서 고른 것만** 반영한다 (`applySpecToPlan`)
+   - `specToApp(spec): AppState` — 다른 앱이 낸 MethodSpec JSON(위험률 표·담보 포함)으로 설계 전체 만들기 (`planFromSpec`). `appToSpec` 과 왕복하면 결과가 같아야 한다
 3. XLSX 를 읽으려면 `extractDoc(name, buf, sheetReader)` 에 시트 읽기 함수를 넘긴다.
 4. LLM 을 쓰려면 `fillWithLlm(result, doc, ask)` 에 `ask` 를 넘긴다. 서버 라우트 예: `app/api/method-llm/route.ts`.
 

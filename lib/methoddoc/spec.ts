@@ -122,6 +122,8 @@ export interface FormulaSpec {
   /** 평문 수식. `_{}` `^{}` 아래·위첨자 표기 */
   text: string;
   note?: string;
+  /** 이 식이 어느 조건에서 나왔는지 — "benefits[0]", "basis.lapse" (화면에서 조건과 짝지을 때 쓴다) */
+  path?: string;
 }
 
 export interface ExtraSection {

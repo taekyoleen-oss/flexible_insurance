@@ -8,8 +8,8 @@ import { extractDoc, ExtractError, type ExtractedDoc, type SheetReader } from "@
 import { parseMethodDoc } from "@/lib/methoddoc/parse";
 import { fillWithLlm, LLM_FIELDS, type LlmAsk } from "@/lib/methoddoc/llm";
 import { docToHtml, docToMarkdown, renderMethodDoc, type DocBlock } from "@/lib/methoddoc/render";
-import { validateSpec, type Confidence, type Evidence, type ParseResult } from "@/lib/methoddoc/spec";
-import { applySpecToPlan, specFromPlanStorage } from "@/lib/methoddoc-bridge";
+import { validateSpec, type Confidence, type Evidence, type MethodSpec, type ParseResult } from "@/lib/methoddoc/spec";
+import { applySpecToPlan, openSpecAsPlan, planFromSpec, readSpecJson, specFromPlanStorage } from "@/lib/methoddoc-bridge";
 
 const TONE: Record<Confidence, string> = {
   high: "bg-sky/15 text-sky", medium: "bg-[#fef3c7] text-[#92400e]", low: "bg-[#fee2e2] text-[#991b1b]",
@@ -58,6 +58,8 @@ export default function MethodPage() {
   const [llmReady, setLlmReady] = useState<boolean | null>(null);
   const [tab, setTab] = useState<"review" | "doc" | "source">("review");
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  /** 다른 앱(Life_ins_Doc_Convert_Studio 등)이 낸 MethodSpec JSON — 검수 없이 설계 전체로 옮긴다 */
+  const [json, setJson] = useState<{ name: string; spec: MethodSpec; warnings: string[]; done: boolean } | null>(null);
   const file = useRef<HTMLInputElement>(null);
   const folder = useRef<HTMLInputElement>(null);
 
@@ -88,6 +90,15 @@ export default function MethodPage() {
 
   /** 폴더·여러 파일을 차례로 읽는다. 하나가 실패해도 나머지는 계속 */
   const onFiles = async (files: File[]) => {
+    setJson(null);
+    if (files.length === 1 && /\.json$/i.test(files[0].name)) {
+      try {
+        const spec = readSpecJson(await files[0].text());
+        setErr(null); setRes(null); setDoc(null); setQueue([]);
+        setJson({ name: files[0].name, spec, warnings: planFromSpec(spec).warnings, done: false });
+      } catch (e) { setErr({ msg: e instanceof SyntaxError ? "JSON 을 읽지 못했습니다." : e instanceof Error ? e.message : String(e) }); }
+      return;
+    }
     const list = files.filter((f) => READABLE.test(f.name)).sort((a, b) => a.name.localeCompare(b.name, "ko"));
     if (!list.length) { setErr({ msg: "읽을 수 있는 파일이 없습니다 (DOCX·HWP·HWPX·PDF·XLSX·CSV·TXT)." }); return; }
     setErr(null); setRes(null); setDoc(null);
@@ -137,11 +148,11 @@ export default function MethodPage() {
         <div className="flex flex-wrap items-center gap-2">
           <Button primary onClick={() => file.current?.click()} disabled={!!busy}>{busy || "파일 고르기"}</Button>
           <Button onClick={() => folder.current?.click()} disabled={!!busy}>폴더 고르기</Button>
-          <input ref={file} type="file" multiple accept=".docx,.hwp,.hwpx,.pdf,.xlsx,.xls,.csv,.txt,.md" className="hidden"
+          <input ref={file} type="file" multiple accept=".docx,.hwp,.hwpx,.pdf,.xlsx,.xls,.csv,.txt,.md,.json" className="hidden"
             onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) void onFiles(fs); e.target.value = ""; }} />
           <input ref={folder} type="file" className="hidden" {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
             onChange={(e) => { const fs = Array.from(e.target.files ?? []); if (fs.length) void onFiles(fs); e.target.value = ""; }} />
-          <span className="text-xs text-navy/55">DOCX · HWP(5.x) · HWPX · <b>PDF</b> · XLSX · CSV · TXT — 여러 개·폴더째 가능</span>
+          <span className="text-xs text-navy/55">DOCX · HWP(5.x) · HWPX · <b>PDF</b> · XLSX · CSV · TXT — 여러 개·폴더째 가능 · MethodSpec <b>JSON</b></span>
           <label className="ml-auto flex items-center gap-1.5 text-sm" title={llmReady === false ? "서버에 ANTHROPIC_API_KEY 가 없어 꺼져 있습니다" : "규칙이 못 찾은 항목만 문단 발췌로 물어봅니다"}>
             <input type="checkbox" className="accent-sky" checked={llmOn} disabled={!llmReady} onChange={(e) => setLlmOn(e.target.checked)} />
             AI 보조 {llmReady === false && <span className="text-navy/40">(미설정)</span>}
@@ -184,6 +195,31 @@ export default function MethodPage() {
           </ul>
         ) : null}
       </Card>
+
+      {json && (() => {
+        const s = json.spec, tables = s.rates.filter((r) => r.table?.ages?.length).length;
+        return (
+          <Card title="MethodSpec JSON → 상품 만들기 (설계 전체)">
+            <p className="text-sm text-navy/80">
+              <b>{s.meta.productName || json.name}</b> · {s.contract.age ?? "—"}세 {s.contract.sex === "F" ? "여" : "남"} · 담보 {s.benefits.length}개 · 위험률 {s.rates.length}개(값 표 {tables}개)
+              {s.units.length > 1 && <> · 계약 단위 {s.units.length}개</>}
+            </p>
+            <p className="mt-1 text-xs text-navy/55">
+              Life_ins_Doc_Convert_Studio 등 다른 앱이 낸 조건입니다. 검수 없이 계약·기초율·사업비·위험률 표(시트 열)·담보를 통째로 옮겨 &quot;상품 만들기&quot; 설계를 바꿉니다.
+              지금 설계가 필요하면 상품 만들기의 보관함에 먼저 저장하세요.
+            </p>
+            {json.warnings.length > 0 && <ul className="mt-2 space-y-0.5 text-xs text-[#92400e]">{json.warnings.map((w, i) => <li key={i}>· {w}</li>)}</ul>}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button primary disabled={json.done} onClick={() => {
+                if (!window.confirm("지금 '상품 만들기' 설계를 이 조건으로 바꿀까요?")) return;
+                openSpecAsPlan(s);
+                setJson({ ...json, done: true });
+              }}>상품 만들기에 넣기</Button>
+              {json.done && <Link href="/builder" className="rounded bg-sky px-3 py-1.5 text-sm font-medium text-white hover:bg-sky/90">넣었습니다 — 상품 만들기 열기 →</Link>}
+            </div>
+          </Card>
+        );
+      })()}
 
       {res && spec && (
         <>
@@ -289,6 +325,7 @@ export default function MethodPage() {
           <li>· <b>DRM·스캔 PDF는 못 읽습니다.</b> 해제본을 DOCX·HWPX·PDF(글자가 살아 있는 것) 로 저장해 올려 주세요. 한글의 &quot;PDF로 저장&quot;은 글자가 남습니다.</li>
           <li>· <b>자동 적용하지 않습니다.</b> 항상 검수에서 고른 것만 반영합니다. AI가 채운 값은 기본 해제 상태입니다.</li>
           <li>· 위험률 <b>표</b>는 별첨 엑셀을 시트에 직접 붙여넣는 쪽이 정확합니다. 본문에서는 계열 이름·근거 문구만 가져옵니다.</li>
+          <li>· <b>MethodSpec JSON</b>(Life_ins_Doc_Convert_Studio 에서 위험률 표를 이어 내보낸 것)은 위험률 표·담보까지 통째로 옮깁니다. 표는 피보험자 성별 한 벌입니다.</li>
           <li>· 회사마다 표기가 달라 사전({LLM_FIELDS.length}개 항목)을 늘려 가며 적중률을 올립니다. 안 잡히는 표기를 알려 주시면 사전에 넣겠습니다.</li>
         </ul>
       </Card>

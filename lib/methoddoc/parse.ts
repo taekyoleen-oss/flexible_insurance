@@ -1,5 +1,5 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { emptySpec, RATE_ROLE_LABEL, validateSpec, type Confidence, type Evidence, type ExpenseItem, type MethodSpec, type ParseResult, type RateRef, type RateRole } from "./spec";
+import { emptySpec, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type Evidence, type ExpenseItem, type MethodSpec, type ParseResult, type RateRef, type RateRole } from "./spec";
 
 /**
  * 산출방법서 → MethodSpec. 규칙(표 먼저, 본문 다음)만으로 돌아간다 — LLM 은 선택이다.
@@ -136,6 +136,8 @@ export function looksLikeRateName(name: string): boolean {
   if (!/(률|율)$/.test(s)) return false;
   if (/^\(?\d/.test(s)) return false;          // "(1) …", "2) …"
   if (BARE_WORD.test(s) || FRAGMENT.test(s)) return false;
+  // 떨어져 있는 조사("g 는 위 …의 급부 발생률")가 있으면 이름이 아니라 문장이다
+  if (/(^|\s)[은는이가을를의에와과]\s/.test(s) || /^[A-Za-z]\s/.test(s)) return false;
   if (NOT_RISK.test(s)) return false;
   return RISK_WORD.test(s);
 }
@@ -189,7 +191,16 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
     ?? opt.fallbackName
     ?? doc.paragraphs.find((p) => /(보험|공제)/.test(p) && ok(p))
     ?? doc.paragraphs[0];
+  // 표지 표에 "상품명 | …", "종류 | …" 행이 있으면 그것이 가장 정확하다
+  const cover = (label: RegExp): [string, number] | undefined => {
+    for (const [ti, t] of doc.tables.entries()) for (const r of [t.head, ...t.rows]) {
+      if (r.length >= 2 && label.test(squeeze(r[0] ?? "").trim()) && r[1]?.trim()) return [r[1].trim(), ti];
+    }
+  };
+  const coverName = cover(/^상품명$/), coverKind = cover(/^종류$/);
+  if (coverName) add("meta.productName", "상품명", coverName[0], `상품명 ${coverName[0]}`, `표 ${coverName[1] + 1}`, "high");
   if (title) add("meta.productName", "상품명", title, title, "표지", "medium");
+  if (coverKind) add("meta.kind", "종류", coverKind[0], `종류 ${coverKind[0]}`, `표 ${coverKind[1] + 1}`, "high");
   const kindLine = doc.paragraphs.find((p) => LOW_KIND.test(p));
   if (kindLine) add("meta.kind", "종류", LOW_KIND.exec(kindLine)![0], kindLine, "본문", "medium");
 
@@ -261,6 +272,10 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
   }
   if (spec.rates.some((r) => r.role === "waiver")) add("basis.waiver", "납입면제", true, spec.rates.find((r) => r.role === "waiver")!.name, "위험률 목록", "medium");
 
+  // 3-0) 계약 표("항목 | 내용")와 담보 표("담보 | 단위 | 급부 유형 | …") — 이 모듈이 낸 산출방법서를 되읽을 때 조건이 온전히 돌아오게
+  readContractTable(doc, add);
+  readBenefitTable(doc, spec, evidence);
+
   // 3-1) 두 단 편집된 PDF 는 "3. 예정이율에 관한 사항" 과 값이 멀리 떨어져 규칙이 못 잇는다.
   //      끝내 못 찾았을 때만 "연 N% 복리" 를 낮은 확신도로 제안한다(기본 미적용, 사람이 확인).
   if (spec.basis.interest === undefined) {
@@ -291,6 +306,73 @@ export function parseMethodDoc(doc: ExtractedDoc, opt: ParseOptions = {}): Parse
 }
 
 type Add = (path: string, label: string, value: string | number | boolean, raw: string, source: string, confidence: Confidence, setValue?: boolean) => void;
+
+const numIn = (s: string) => { const m = /(-?[\d,]+(?:\.\d+)?)/.exec(s); return m ? n(m[1]) : null; };
+
+/** "항목 | 내용" 계약 표: 피보험자 40세 남 · 보험기간 71년 · 납입주기 월납 · 보험가입금액 1억 */
+function readContractTable(doc: ExtractedDoc, add: Add) {
+  doc.tables.forEach((t, ti) => {
+    if (t.head.length !== 2 || !/항목/.test(t.head[0])) return;
+    for (const [k, v] of t.rows.map((r) => [squeeze(r[0] ?? ""), (r[1] ?? "").trim()])) {
+      const src = `표 ${ti + 1}`, raw = `${k} ${v}`;
+      if (/^피보험자/.test(k)) {
+        const age = /(\d+)\s*세/.exec(v);
+        if (age) add("contract.age", "가입연령", Number(age[1]), raw, src, "high");
+        if (/남/.test(v)) add("contract.sex", "성별", "M", raw, src, "high");
+        else if (/여/.test(v)) add("contract.sex", "성별", "F", raw, src, "high");
+      } else if (/^보험기간/.test(k)) {
+        const age = /(\d+)\s*세\s*만기/.exec(v), yrs = /(\d+)\s*년/.exec(v);
+        if (age) add("contract.termAge", "보험기간(세만기)", Number(age[1]), raw, src, "high");
+        else if (yrs) add("contract.termYears", "보험기간(년)", Number(yrs[1]), raw, src, "high");
+      } else if (/^(보험료)?납입주기/.test(k)) {
+        const f = /월납/.test(v) ? 12 : /연납/.test(v) ? 1 : /6\s*개월/.test(v) ? 2 : /3\s*개월/.test(v) ? 4 : /연\s*(\d+)\s*회/.test(v) ? Number(/연\s*(\d+)\s*회/.exec(v)![1]) : null;
+        if (f) add("contract.freq", "납입주기", f, raw, src, "high");
+      } else if (/^보험가입금액/.test(k)) {
+        const a = numIn(v);
+        if (a) add("contract.sumAssured", "보험가입금액", a, raw, src, "high");
+      }
+    }
+  });
+}
+
+/** "담보 | 단위 | 급부 유형 | 지급 사유 | 보장금액 | 보장 종료 | 면책 | 급부 위험률 | 탈퇴 위험률" 표 */
+function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]) {
+  const byName = (name: string) => {
+    const s = name.trim();
+    return spec.rates.find((r) => r.name === s) ?? spec.rates.find((r) => s && (r.name.endsWith(` · ${s}`) || s.endsWith(r.name)));
+  };
+  doc.tables.forEach((t, ti) => {
+    const h = t.head.map((c) => squeeze(c));
+    const col = (re: RegExp) => h.findIndex((c) => re.test(c));
+    const cName = col(/^담보$/), cRole = col(/^급부유형$/), cAmt = col(/^보장금액$/);
+    if (cName < 0 || cRole < 0 || cAmt < 0) return;
+    const cUnit = col(/^단위$/), cTrig = col(/^지급사유$/), cEnd = col(/^보장종료$/), cWait = col(/^면책$/), cEv = col(/^급부위험률$/), cExit = col(/^탈퇴위험률$/);
+    t.rows.forEach((r) => {
+      const get = (c: number) => (c >= 0 ? (r[c] ?? "").trim() : "");
+      const name = get(cName);
+      if (!name) return;
+      const roleRaw = ROLE_BY_LABEL.get(get(cRole));
+      const role = roleRaw && roleRaw !== "waiver" && roleRaw !== "lapse" ? roleRaw : "incidence";
+      const ev = get(cEv), exits = get(cExit);
+      const b: BenefitSpec = {
+        id: `b${spec.benefits.length + 1}`, name, role,
+        ...(get(cUnit) ? { unit: get(cUnit) } : {}),
+        ...(get(cTrig) && get(cTrig) !== "—" ? { trigger: get(cTrig) } : {}),
+      };
+      const amt = numIn(get(cAmt));
+      if (amt !== null) b.amount = amt;
+      const end = /(\d+)\s*세/.exec(get(cEnd));
+      if (end) b.endAge = Number(end[1]);
+      const wait = /(\d+)\s*일/.exec(get(cWait));
+      if (wait) b.waitDays = Number(wait[1]);
+      if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) b.rateId = byName(ev)?.id;
+      const ids = exits.split(/\s+및\s+|\s*\+\s*|,\s*/).map((x) => byName(x)?.id).filter((x): x is string => !!x);
+      if (ids.length) b.exitRateIds = ids;
+      spec.benefits.push(b);
+      evidence.push({ path: `benefits[${spec.benefits.length - 1}]`, label: "담보", value: name, raw: r.filter(Boolean).join(" | ").slice(0, 160), source: `표 ${ti + 1}`, confidence: "high" });
+    });
+  });
+}
 
 /**
  * 사업비 표. 회사마다 모양이 달라 두 갈래로 본다.

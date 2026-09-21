@@ -259,7 +259,7 @@ export function extractText(buf: Uint8Array): ExtractedDoc {
       i = j - 1;
       continue;
     }
-    paragraphs.push(l);
+    paragraphs.push(l.replace(/^(#{1,6}|>)\s+/, ""));   // Markdown 제목·인용 기호는 글이 아니다
   }
   return { kind: "text", paragraphs, tables, warnings: [] };
 }
