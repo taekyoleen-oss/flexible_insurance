@@ -64,7 +64,7 @@ export interface PlanCoverageResult {
   benefit: number[];     // 연도별 보장금액(원), t=0..n-1 (담보 종료 후 0)
   survival: number[];    // 시점 생존급부(원), t=0..n
   reserve: number[]; reserveStd: number[]; cash: number[]; deduction: number[];
-  low?: { net100k: number; gross100k: number; monthlyNet: number; monthlyGross: number; pvCsv: number; reserve: number[]; reserveStd: number[]; cash: number[] };
+  low?: { net100k: number; gross100k: number; monthlyNet: number; monthlyGross: number; pvCsv: number; perUnit: PremiumResult; reserve: number[]; reserveStd: number[]; cash: number[] };
 }
 
 export interface PlanTotals {
@@ -158,7 +158,7 @@ function coverage(c: PlanCoverage, input: PlanInput, n: number, N: number): Plan
     const pL = premium(kL, contract, e, csv[0]), psL = premium(ksL, contract, e, csvs[0]);
     const net100k = r0(pL.net), gross100k = r0(pL.gross);
     out.low = {
-      net100k, gross100k, monthlyNet: net100k * units, monthlyGross: gross100k * units, pvCsv: csv[0],
+      net100k, gross100k, monthlyNet: net100k * units, monthlyGross: gross100k * units, pvCsv: csv[0], perUnit: pL,
       reserve: grow(reserves(kL, contract, e, pL, csv).map((v) => r0(v) * units), N + 1),
       reserveStd: grow(reserves(ksL, contract, e, psL, csvs).map((v) => r0(v) * units), N + 1),
       cash: grow(sur.cash.map((x, t) => (t < m ? Math.round(x * low.ratio) : x)), N + 1),

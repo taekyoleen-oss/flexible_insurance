@@ -3,7 +3,7 @@ import Link from "next/link";
 import { FormulaText } from "@/components/formula-text";
 import { PlanProvider, usePlan } from "@/components/builder/plan-provider";
 import { Button } from "@/components/ui";
-import { buildPlanDoc, docToHtml, docToMarkdown, planDocTitle, type DocBlock } from "@/lib/plan-doc";
+import { buildPlanDoc, docToHtml, docToMarkdown, isNumericCell, planDocTitle, type DocBlock } from "@/lib/plan-doc";
 
 function Block({ b }: { b: DocBlock }) {
   if (b.t === "p") return <p className="mt-2 text-sm text-navy/80">{b.text}</p>;
@@ -15,7 +15,7 @@ function Block({ b }: { b: DocBlock }) {
         <thead><tr>{b.head.map((h) => <th key={h} className="border border-navy/15 bg-cream px-2 py-1 text-left font-medium text-navy/70">{h}</th>)}</tr></thead>
         <tbody>
           {b.rows.map((row, i) => (
-            <tr key={i}>{row.map((c, j) => <td key={j} className={`border border-navy/15 px-2 py-1 ${j === 0 ? "" : "text-right font-mono"}`}>{c}</td>)}</tr>
+            <tr key={i}>{row.map((c, j) => <td key={j} className={`break-keep border border-navy/15 px-2 py-1 ${j > 0 && isNumericCell(c) ? "text-right font-mono" : ""}`}>{c}</td>)}</tr>
           ))}
         </tbody>
       </table>

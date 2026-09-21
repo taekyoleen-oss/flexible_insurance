@@ -37,7 +37,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   const rateName = (id?: string) => spec.rates.find((r) => r.id === id)?.name ?? "—";
 
   // 0. 표지
-  out.push({ id: "cover", title: "보험료 및 책임준비금 산출방법서", blocks: [
+  out.push({ id: "cover", title: "개요", blocks: [
     { t: "table", head: ["항목", "내용"], rows: [
       ["상품명", spec.meta.productName || "(이름 없음)"],
       ...(spec.meta.insurer ? [["회사", spec.meta.insurer]] : []),
@@ -186,17 +186,21 @@ export function docToMarkdown(sections: DocSection[], title?: string): string {
   return lines.join("\n");
 }
 
+/** 숫자 칸인지 — 금액·비율·기간 같은 것만 오른쪽 정렬한다("종신보험", "보험가입금액" 같은 글자 칸은 왼쪽) */
+export const isNumericCell = (c: string | number) =>
+  typeof c === "number" || /^[-−+]?[\d,]+(\.\d+)?(\s*\/\s*[\d,]+(\.\d+)?)?\s*(원\/일|원|%|‰|세|년|배|개|일|행)?$/.test(String(c).trim());
+
 /** 블록 → 인쇄용 HTML (브라우저 없이도 파일로 낼 수 있게) */
 export function docToHtml(sections: DocSection[], title: string): string {
   const esc = (s: string | number) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
   const sub = (s: string) => esc(s).replace(/_\{([^}]*)\}/g, "<sub>$1</sub>").replace(/\^\{([^}]*)\}/g, "<sup>$1</sup>")
-    .replace(/_([A-Za-z0-9]+)/g, "<sub>$1</sub>").replace(/\^([A-Za-z0-9]+)/g, "<sup>$1</sup>");
+    .replace(/_([A-Za-z0-9α-ωΑ-Ω]+)/g, "<sub>$1</sub>").replace(/\^([A-Za-z0-9가-힣α-ωΑ-Ω]+)/g, "<sup>$1</sup>");
   const body = sections.map((sec) => `<section><h2>${esc(sec.title)}</h2>${sec.blocks.map((b) => {
     if (b.t === "p") return `<p>${sub(b.text)}</p>`;
     if (b.t === "note") return `<blockquote>${sub(b.text)}</blockquote>`;
     if (b.t === "formula") return `<pre>${sub(b.text)}</pre>`;
-    return `<table><thead><tr>${b.head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${
-      b.rows.map((r) => `<tr>${r.map((c, i) => `<td class="${i ? "num" : ""}">${sub(String(c))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    return `<table${b.head.length >= 8 ? ' class="wide"' : ""}><thead><tr>${b.head.map((h) => `<th>${sub(h)}</th>`).join("")}</tr></thead><tbody>${
+      b.rows.map((r) => `<tr>${r.map((c, i) => `<td${i && isNumericCell(c) ? ' class="num"' : ""}>${sub(String(c))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
   }).join("")}</section>`).join("");
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
 @page{size:A4;margin:18mm 16mm}
@@ -204,8 +208,9 @@ body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;font-size:10.5pt;lin
 h1{font-size:18pt;border-bottom:2px solid #1b2845;padding-bottom:6px}
 h2{font-size:13pt;margin-top:22px;border-bottom:1px solid #ccc;padding-bottom:3px;break-after:avoid}
 table{border-collapse:collapse;width:100%;margin:8px 0;font-size:9.5pt;break-inside:avoid}
-th,td{border:1px solid #bbb;padding:4px 7px;text-align:left;vertical-align:top}
-th{background:#f0f2f5;font-weight:600}td.num{text-align:right;font-variant-numeric:tabular-nums}
+th,td{border:1px solid #bbb;padding:4px 7px;text-align:left;vertical-align:top;word-break:keep-all}
+th{background:#f0f2f5;font-weight:600}td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.wide{font-size:7.8pt}table.wide th,table.wide td{padding:3px 4px}
 blockquote{border-left:3px solid #4a90c2;margin:8px 0;padding:2px 12px;color:#444;background:#f7f9fb}
 pre{background:#f6f7f9;padding:8px 10px;white-space:pre-wrap;font-size:10pt}
 </style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;

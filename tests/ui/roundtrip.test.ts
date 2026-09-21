@@ -136,6 +136,33 @@ describe("② 입력 조건 + 산출 결과 → 산출방법서 → 다시 읽�
     expect(s2.base.low.ratio).toBe(0);
   });
 
+  it("일반 종신보험 문서는 문서 안의 숫자만으로 검산된다 (P = PVB/N*, 해약공제, 해지환급금)", () => {
+    const s = plan("whole");
+    const p = evaluateProduct(s);
+    const sec = buildPlanDoc(s, p, new Date("2026-09-21"));
+    const table = (id: string, i = 0) => sec.find((x) => x.id === id)!.blocks.filter((b) => b.t === "table")[i] as { head: string[]; rows: (string | number)[][] };
+    const num = (v: string | number) => Number(String(v).replace(/[^\d.-]/g, ""));
+
+    const prem = table("premium-result");
+    const [, , , pvb, nStar, P, G, per100k] = prem.rows[0];
+    expect(num(P)).toBeCloseTo(num(pvb) / num(nStar), 9);             // 반올림값이 아니라 PVB/N* 그대로
+    expect(num(per100k)).toBe(Math.round(num(G) * 1e5));
+
+    const alpha = table("premium-result", 1).rows[0];                 // P_base · α · α^std · α^공제
+    expect(num(alpha[4])).toBe(Math.min(num(alpha[2]), num(alpha[3])));
+
+    const res = table("reserve-result");
+    expect(res.head).toContain("표준준비금");
+    for (const r of res.rows) {                                         // 해지환급금 = max(V − 공제, 0)
+      const [, , , , V, , ded, cash] = r.map(num);
+      expect(cash).toBe(Math.max(V - ded, 0));
+    }
+    const y1 = res.rows.find((r) => r[0] === "1년")!;                   // 공제는 α^공제 를 7년에 걸쳐 균등하게
+    expect(num(y1[6])).toBe(Math.round(num(alpha[4]) * 6 / 7));
+
+    expect(docToMarkdown(sec)).toContain("| 사망 | 주계약 | 사망 | 사망 시 |");   // 지급 사유가 비지 않는다
+  });
+
   it("저장소 → MethodSpec 도 같은 값을 낸다 (변환기 화면이 쓰는 경로)", () => {
     const s = plan("twoMajor");
     seed(s);

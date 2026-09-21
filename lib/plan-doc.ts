@@ -1,11 +1,12 @@
 import { pct, wonExact } from "./format";
 import type { RateKind } from "./plan-rates";
 import { isFormula } from "./sheet-formula";
+import { BENEFIT_KINDS } from "./engine/plan";
 import { FREQS, tabConditions, waitFactorOf, type PlanState, type ProductResult } from "./plan-state";
 import { emptySpec, type BenefitSpec, type ExpenseItem, type MethodSpec, type RateRef, type RateRole } from "./methoddoc/spec";
 import { renderMethodDoc, type DocSection } from "./methoddoc/render";
 
-export { docToHtml, docToMarkdown, type DocBlock, type DocSection } from "./methoddoc/render";
+export { docToHtml, docToMarkdown, isNumericCell, type DocBlock, type DocSection } from "./methoddoc/render";
 
 /**
  * 이 앱의 조건·산출 결과 → 중립 모델(MethodSpec) → 산출방법서.
@@ -15,6 +16,8 @@ export { docToHtml, docToMarkdown, type DocBlock, type DocSection } from "./meth
 const ROLE: Record<RateKind, RateRole> = { death: "death", incidence: "incidence", recurring: "recurring", other: "other" };
 const BENEFIT_ROLE = { death: "death", incidence: "incidence", daily: "recurring", survival: "other" } as const;
 const won = (x: number) => wonExact(Math.round(x));
+/** 급부 유형별 지급 사유 문구 */
+const TRIGGER = Object.fromEntries(BENEFIT_KINDS.map((k) => [k.kind, k.kind === "incidence" ? "진단 확정 시" : k.unit])) as Record<(typeof BENEFIT_KINDS)[number]["kind"], string>;
 
 /** PlanState + 산출 결과 → MethodSpec */
 export function planToSpec(s: PlanState, p: ProductResult): MethodSpec {
@@ -53,7 +56,7 @@ export function planToSpec(s: PlanState, p: ProductResult): MethodSpec {
       const id = `${tab.id}:${c.id}`;
       benefitIds.push(id);
       const b: BenefitSpec = {
-        id, name: c.label, unit: tab.name, role: BENEFIT_ROLE[c.kind],
+        id, name: c.label, unit: tab.name, role: BENEFIT_ROLE[c.kind], trigger: TRIGGER[c.kind],
         amount: c.amount, endAge: c.endAge,
         waitDays: c.waitMonths ? Math.round(c.waitMonths * 30.4) : undefined,
         rateId: c.kind === "survival" ? undefined : `${tab.id}:${c.eventColId}`,
@@ -148,6 +151,7 @@ function formulaSpecs(s: PlanState): MethodSpec["formulas"] {
       note: "순보식에 납입 후 유지비 β′를 더한 형태. 표준준비금은 표준이율로 같은 식을 계산한다." },
     { section: "해지환급금의 계산", label: "해약공제와 해지환급금", text:
       "해약공제_t = α^공제 · max( min(m,7) − t, 0 ) / min(m,7)        α^공제 = min( α, α^std )\n" +
+      (meth ? "α = α_S + α_P · round₅( P_base )    (영업보험료 G 에는 반올림 전 P_base 를 쓴다)\n" : "") +
       "W^표준_t = max( V_t − 해약공제_t, 0 )" + (low ? `\n납입기간 중: W_t = ${Math.round(s.base.low.ratio * 100)}% × W^표준_t        납입 완료 후: W_t = W^표준_t` : "") },
     { section: "해지환급금의 계산", label: "환급률", text: "환급률_t = W_t / 납입누계_t,   납입누계_t = min(t, m) × mm × G" },
   );
@@ -162,23 +166,30 @@ export function resultSections(s: PlanState, p: ProductResult): DocSection[] {
   return [
     { id: "premium-result", title: "산출 결과 — 보험료", blocks: [
       { t: "table",
-        head: ["단위", "담보", "n / m", "PVB", "N*", "P(1단위)", "G(1단위)", "10만원당 G", "보장금액", `${freqLabel} 보험료`],
+        head: ["단위", "담보", "n / m", "PVB", "N*", "P = PVB/N*", "G", "10만원당 G", "보장금액", `${freqLabel} 보험료`],
         rows: p.coverages.map((c) => {
           const st = allCov.find((x) => x.id === c.id)!;
-          return [c.tabName, c.label, `${c.n} / ${c.payYears}`, c.perUnit.pvb.toFixed(4), c.perUnit.nStar.toFixed(2),
-            (p.low ? c.low!.net100k / 1e5 : c.per100k.net / 1e5).toPrecision(6),
-            (p.low ? c.low!.gross100k / 1e5 : c.per100k.gross / 1e5).toPrecision(6),
+          const u = p.low ? c.low!.perUnit : c.perUnit;       // 저해지는 PVB 에 CSV₀ 가, N* 에 해지 탈퇴가 들어간다
+          return [c.tabName, c.label, `${c.n} / ${c.payYears}`, u.pvb.toFixed(4), u.nStar.toFixed(2),
+            u.net.toFixed(10), u.gross.toFixed(10),
             `${(p.low ? c.low!.gross100k : c.per100k.gross).toLocaleString()}원`,
             `${won(st.amount)}${st.kind === "daily" ? "/일" : ""}`,
             won(p.low ? c.low!.monthlyGross : c.monthlyGross)];
         }).concat([["합계", "", "", "", "", "", "", "", "", won(p.effective.monthlyGross)]]) },
+      { t: "note", text: "PVB·N*·P·G 는 가입금액 1원, 기수 l_x = 100,000 기준의 반올림 전 값이다. 10만원당 G 는 G × 100,000 을 원 단위로 반올림한 값이며, 담보 보험료 = 10만원당 G × (보장금액 ÷ 100,000) 이다." },
+      { t: "table", head: ["담보", "기준연납순보험료 P_base", "신계약비 α (적용)", "α^std (표준)", "해약공제 기준 α^공제 = min"],
+        rows: p.coverages.map((c) => {
+          const st = allCov.find((x) => x.id === c.id)!, k = st.amount / 1e5;
+          return [c.label, c.perUnit.base.toFixed(10), won(c.per100k.alpha * k), won(c.per100k.alphaStd * k), won(c.per100k.newBiz * k)];
+        }) },
     ] },
     { id: "reserve-result", title: "산출 결과 — 책임준비금·해지환급금", blocks: [
-      { t: "table", head: ["경과", "연령", "보장금액", "납입누계", "책임준비금", "해약공제", "해지환급금", "환급률"],
-        rows: [0, 1, 3, 5, 10, Math.min(p.payYears, p.n), Math.min(p.payYears + 5, p.n), p.n]
-          .filter((t, i, a) => a.indexOf(t) === i && t <= p.n)
+      { t: "table", head: ["경과", "연령", "보장금액", "납입누계", "책임준비금(적용)", "표준준비금", "해약공제", "해지환급금", "환급률"],
+        rows: [0, 1, 3, 5, Math.min(7, p.payYears), 10, Math.min(p.payYears, p.n), Math.min(p.payYears + 5, p.n), p.n]
+          .filter((t, i, a) => a.indexOf(t) === i && t <= p.n).sort((a, b) => a - b)
           .map((t) => [`${t}년`, `${s.age + t}세`, won(p.benefit[t] ?? 0), won(p.effective.paid[t]), won(p.effective.reserve[t]),
-            won(p.effective.deduction[t]), won(p.effective.cash[t]), pct(p.effective.rate[t] ?? 0)]) },
+            won(p.effective.reserveStd[t]), won(p.effective.deduction[t]), won(p.effective.cash[t]), pct(p.effective.rate[t] ?? 0)]) },
+      { t: "note", text: `해지환급금 = max(책임준비금(적용) − 해약공제, 0). 해약공제는 α^공제 를 min(m,7) = ${Math.min(7, p.payYears)}년에 걸쳐 균등하게 줄인다. 표준준비금은 표준이율로 같은 식을 계산한 값으로, 회계연도말 적립금은 두 값 중 큰 금액으로 한다.` },
     ] },
     { id: "check", title: "검증", blocks: [
       { t: "table", head: ["항목", "값"], rows: [
