@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   activeTab, autoExitCols, columnOrigin, evaluateProduct, initialPlan, overriddenKeys, planReducer, planSteps,
-  PLAN_RECIPES, sanitizePlan, suggestEventCol, tabConditions, waitFactorOf, type PlanState,
+  PLAN_RECIPES, sanitizePlan, suggestEventCol, tabConditions, tabPlanInput, waitFactorOf, type PlanState,
 } from "@/lib/plan-state";
-import { MAX_AGE, parseRateText, rateCoverage, rateCsv, RATE_PRESETS, resolveSheet, toAgeArray, waiverCols } from "@/lib/plan-rates";
+import { combineDecrements, MAX_AGE, parseRateText, rateCoverage, rateCsv, RATE_PRESETS, resolveSheet, toAgeArray, waiverCols } from "@/lib/plan-rates";
 import { snippetsFor } from "@/lib/sheet-snippets";
 
 const run = (s: PlanState) => evaluateProduct(s);
@@ -56,9 +56,9 @@ describe("시트 편집 (지금 탭)", () => {
   const s0 = initialPlan();
   it("칸에 수식을 넣고 아래로 채우면 앞 값이 이어진다", () => {
     const col = colOf(s0, /2대질병/);
-    const b = planReducer(planReducer(s0, { type: "cell", colId: col.id, row: 1, value: "=D1" }), { type: "fillDown", colId: col.id, row: 1 });
+    const b = planReducer(planReducer(s0, { type: "cell", colId: col.id, row: 1, value: "=C1" }), { type: "fillDown", colId: col.id, row: 1 });
     const cells = main(b).sheet.columns.find((c) => c.id === col.id)!.cells;
-    expect(cells.slice(1, 4)).toEqual(["=D1", "=D2", "=D3"]);
+    expect(cells.slice(1, 4)).toEqual(["=C1", "=C2", "=C3"]);
     const vals = resolveSheet(main(b).sheet).byId[col.id];
     expect(vals[3]).toBe(vals[0]);
   });
@@ -102,18 +102,58 @@ describe("위험률 유형 ↔ 담보·납입면제 연결", () => {
     expect(autoExitCols(main(a).sheet, "daily", rec.id)).not.toContain(rec.id);
     expect(suggestEventCol(main(a).sheet, "daily")).toBe(rec.id);
   });
-  it("납입면제 열의 합이 f가 되고, 끄면 보험료가 내려간다", () => {
-    expect(waiverCols(main(s).sheet)).toEqual([colOf(s, /납입면제/).id]);
-    const off = planReducer(s, { type: "conditions", patch: { waiver: false } });
-    expect(unitGross(s)).toBeGreaterThan(unitGross(off));
+  it("따로 둔 납입면제율이 없다 — 납입자수는 담보의 탈퇴 사유로만 줄어든다", () => {
+    expect(waiverCols(main(s).sheet)).toEqual([]);
+    expect(tabConditions(s, main(s)).waiver).toBe(false);
+    const { input } = tabPlanInput(s, main(s), resolveSheet(main(s).sheet));
+    expect(input.waiverRate).toEqual([]);
   });
-  it("납입면제 열을 수식으로 만들어도 반영된다", () => {
-    const f = colOf(s, /납입면제/), death = colOf(s, /사망/);
-    let a = s;
-    main(s).sheet.ages.forEach((_, i) => { a = planReducer(a, { type: "cell", colId: f.id, row: i, value: `=B${i + 1}*2` }); });
+  it("추가 납입면제 사유(보장은 유지, 납입만 면제)를 켜면 납입자가 빨리 줄어 보험료가 오른다", () => {
+    const a = planReducer(planReducer(s, { type: "addColumn", presetId: "waiver" }), { type: "conditions", patch: { waiver: true } });
+    expect(waiverCols(main(a).sheet)).toHaveLength(1);
+    expect(unitGross(a)).toBeGreaterThan(unitGross(s));
+  });
+  it("추가 납입면제 열을 수식으로 만들어도 반영된다", () => {
+    let a = planReducer(planReducer(s, { type: "addRecipeColumn", recipeId: "waiverFactor" }), { type: "conditions", patch: { waiver: true } });
+    const f = main(a).sheet.columns[main(a).sheet.columns.length - 1], death = colOf(s, /사망/);
+    const before = unitGross(a);
+    main(a).sheet.ages.forEach((_, i) => { a = planReducer(a, { type: "cell", colId: f.id, row: i, value: `=B${i + 1}*2` }); });
     const r = resolveSheet(main(a).sheet);
     expect(r.byId[f.id][0]).toBeCloseTo(r.byId[death.id][0] * 2, 12);
-    expect(unitGross(a)).not.toBe(unitGross(s));
+    expect(unitGross(a)).toBeGreaterThan(before);
+  });
+});
+
+describe("탈퇴 사유 결합 — 유지자수·납입자수", () => {
+  it("사유 하나면 1 − q, 둘이면 1 − q − k + q·k/2, 셋이면 1 − Σ + Σ곱/2", () => {
+    expect(combineDecrements([[0.01]])).toEqual([0.01]);
+    const [two] = combineDecrements([[0.01], [0.002]]);
+    expect(1 - two).toBeCloseTo(1 - 0.01 - 0.002 + 0.01 * 0.002 / 2, 15);
+    const [three] = combineDecrements([[0.01], [0.002], [0.03]]);
+    expect(1 - three).toBeCloseTo(1 - 0.042 + (0.01 * 0.002 + 0.01 * 0.03 + 0.002 * 0.03) / 2, 15);
+    expect(combineDecrements([[1], [0.02]])).toEqual([1]);     // 사망률 1 인 나이는 1 로 막는다
+  });
+  it("진단형: 탈퇴 = 사망 ⊕ 진단, 급부 = 진단율 그대로", () => {
+    const s = initialPlan();
+    const r = resolveSheet(main(s).sheet);
+    const { coverages } = tabPlanInput(s, main(s), r);
+    const q = r.byId[colOf(s, /사망/).id][0], k = r.byId[colOf(s, /2대질병/).id][0];
+    expect(coverages[0].exit[40]).toBeCloseTo(q + k - q * k / 2, 15);
+    expect(coverages[0].event[40]).toBeCloseTo(k, 15);
+  });
+  it("종신: 사망 또는 80% 이상 장해에 같은 보험금 — 한 담보, 급부 = 탈퇴 전부", () => {
+    const w = PLAN_RECIPES.find((x) => x.id === "whole")!.build("M", 40);
+    const r = resolveSheet(main(w).sheet);
+    const { coverages, input } = tabPlanInput(w, main(w), r);
+    expect(main(w).coverages).toHaveLength(1);
+    const q = r.byId[colOf(w, /사망/).id][0], k = r.byId[colOf(w, /80% 이상 장해/).id][0];
+    expect(k).toBeCloseTo(0.000147, 12);                          // 써미트 2014-59호 40세 남 재해 0.000052 + 질병 0.000095
+    expect(coverages[0].exit[40]).toBeCloseTo(q + k - q * k / 2, 15);
+    expect(coverages[0].event).toEqual([]);                       // 급부 = 탈퇴
+    expect(input.waiverRate).toEqual([]);                         // 납입자수 = 유지자수
+    // 80% 장해를 급부에 넣었으니 사망만 보장할 때보다 비싸다
+    const deathOnly = planReducer(w, { type: "coverage", id: main(w).coverages[0].id, patch: { exitColIds: [colOf(w, /사망/).id] } });
+    expect(unitGross(w)).toBeGreaterThan(unitGross(deathOnly));
   });
 });
 
@@ -240,10 +280,11 @@ describe("단계 카드", () => {
     const a = planReducer(planReducer(initialPlan(), { type: "addTab" }), { type: "conditions", patch: { interest: 0.04 } });
     expect(planSteps(a, run(a)).find((x) => x.code === "M03")!.overridden).toBe(true);
   });
-  it("납입면제 열을 모두 끄면 M05가 오류", () => {
-    let s = initialPlan();
-    for (const c of main(s).sheet.columns) s = planReducer(s, { type: "column", colId: c.id, patch: { waiver: false } });
+  it("추가 납입면제를 켰는데 납입면제 열이 없으면 M05가 오류", () => {
+    const s0 = initialPlan();
+    const s = planReducer(s0, { type: "conditions", patch: { waiver: true } });
     expect(planSteps(s, run(s)).find((x) => x.code === "M05")!.status).toBe("error");
+    expect(planSteps(s0, run(s0)).find((x) => x.code === "M05")!.summary).toEqual(["납입자수 = 유지자수"]);
   });
   it("시트 수식 오류가 있으면 M04가 칸 위치를 알려준다", () => {
     const s0 = initialPlan();
@@ -256,8 +297,8 @@ describe("단계 카드", () => {
 describe("수식 추천", () => {
   it("고른 칸에 맞춰 실제 열 문자로 만들어 준다", () => {
     const s = initialPlan();
-    const tips = snippetsFor({ sheet: main(s).sheet, col: main(s).sheet.columns[2], colIdx: 2, row: 3 });
-    expect(tips.find((t) => t.id === "carry")!.formula).toBe("=D3");
+    const tips = snippetsFor({ sheet: main(s).sheet, col: main(s).sheet.columns[1], colIdx: 1, row: 3 });
+    expect(tips.find((t) => t.id === "carry")!.formula).toBe("=C3");
     expect(tips.find((t) => t.id === "copy")!.formula).toBe("=B4");
     expect(tips.some((t) => t.formula.includes("IF("))).toBe(true);
   });

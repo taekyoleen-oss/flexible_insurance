@@ -92,7 +92,8 @@ describe("② 입력 조건 + 산출 결과 → 산출방법서 → 다시 읽�
     expect(md).toContain("2.50%");                    // 예정이율
     expect(md).toContain("20년");                     // 납입기간
     expect(md).toContain("3대질병 진단");
-    expect(md).toContain("납입면제 발생률");           // 위험률 목록
+    expect(md).toContain("80% 이상 장해율");           // 추가 납입면제 사유(고도후유장해)
+    expect(md).toContain("납입자수  l′_{x+t+1} = l′_{x+t} × ( 1 − Q_{x+t} − f_{x+t} + Q_{x+t}·f_{x+t}/2 )");
     expect(md).toContain("산출 결과 — 보험료");
     expect(md).toContain("산출 결과 — 책임준비금·해지환급금");
     // 표시한 월보험료가 실제 산출값과 같다
@@ -160,7 +161,12 @@ describe("② 입력 조건 + 산출 결과 → 산출방법서 → 다시 읽�
     const y1 = res.rows.find((r) => r[0] === "1년")!;                   // 공제는 α^공제 를 7년에 걸쳐 균등하게
     expect(num(y1[6])).toBe(Math.round(num(alpha[4]) * 6 / 7));
 
-    expect(docToMarkdown(sec)).toContain("| 사망 | 주계약 | 사망 | 사망 시 |");   // 지급 사유가 비지 않는다
+    const md = docToMarkdown(sec);
+    expect(md).toContain("| 사망·80% 이상 장해 | 주계약 | 사망 | 사망 또는 80% 이상 장해 시 |");
+    // 납입면제율이 아니라 납입자수 — 사망과 80% 장해 두 사유의 잔존 식
+    expect(md).toContain("유지자수  l_{x+t+1} = l_{x+t} × ( 1 − q_{x+t} − k_{x+t} + q_{x+t}·k_{x+t}/2 )");
+    expect(md).toContain("납입자수  l′_{x+t+1} = l′_{x+t} × ( 1 − q_{x+t} − k_{x+t} + q_{x+t}·k_{x+t}/2 )");
+    expect(md).not.toContain("납입면제 발생률");
   });
 
   it("저장소 → MethodSpec 도 같은 값을 낸다 (변환기 화면이 쓰는 경로)", () => {

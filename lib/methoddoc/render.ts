@@ -81,11 +81,16 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       basisBlocks.push({ t: "note", text: `납입기간 중 해지환급금 = 표준형(완전 환급) × ${Math.round(spec.basis.lowRatio * 100)}%${spec.basis.lowRatio === 0 ? " (무해지환급형)" : ""}.` });
     }
   } else basisBlocks.push({ t: "p", text: "적용하지 않음 (w = 0)." });
-  basisBlocks.push({ t: "p", text: "1.4. 납입면제에 관한 사항" });
+  basisBlocks.push({ t: "p", text: "1.4. 납입면제(납입자수)에 관한 사항" });
   const waiverRates = spec.rates.filter((r) => r.role === "waiver");
-  basisBlocks.push(spec.basis.waiver && waiverRates.length
-    ? { t: "formula", text: `f_x = ${waiverRates.map((r) => r.name).join(" + ")}` }
-    : { t: "p", text: spec.basis.waiver ? "납입면제를 적용하나 위험률이 지정되지 않았습니다." : "적용하지 않음 (f = 0)." });
+  if (spec.basis.waiver && waiverRates.length) {
+    basisBlocks.push({ t: "p", text: "납입자수 l′ 는 담보의 탈퇴 사유로 유지자수와 함께 줄고, 아래 사유가 생기면 보장은 유지한 채 납입만 면제되어 더 준다." });
+    basisBlocks.push({ t: "formula", text: `f_x : ${waiverRates.map((r) => r.name).join(" · ")}` });
+  } else {
+    basisBlocks.push({ t: "p", text: spec.basis.waiver
+      ? "납입면제를 적용하나 위험률이 지정되지 않았습니다."
+      : "별도의 납입면제율을 두지 않는다. 납입자수 l′ 는 각 담보의 탈퇴 사유로 유지자수 l 과 똑같이 줄어든다(3. 계산기수의 담보별 식)." });
+  }
   basisBlocks.push({ t: "p", text: "1.5. 시산보험료 계산 시 적용하는 사업비에 관한 사항" });
   basisBlocks.push(spec.expenses.length
     ? { t: "table", head: ["구분", "기호", "기준", "적용사업비율"], rows: spec.expenses.map((e) => [
@@ -109,8 +114,8 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       wonOf(b.amount) + (b.role === "recurring" ? "/일" : ""),
       b.endAge ? `${b.endAge}세` : "—",
       b.waitDays ? `${b.waitDays}일` : "없음",
-      rateName(b.rateId),
-      (b.exitRateIds ?? []).map(rateName).join(" + ") || "—",
+      b.role === "death" && !b.rateId ? "탈퇴 사유 전부" : rateName(b.rateId),
+      (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—",
     ]) });
   for (const b of spec.benefits) {
     if (b.steps?.length) unitBlocks.push({ t: "note", text: `${b.name}: 연령 구간 배수 ${b.steps.map((x) => `${x.fromAge}~${x.toAge}세 ${x.multiple}배`).join(" · ")}` });

@@ -2,7 +2,7 @@ import { BENEFIT_KINDS, computePlan, getAssumption, planTermYears, type BenefitK
 import { clamp, pct, won } from "./format";
 import {
   columnArray, defaultSheet, deathCols, firstError, MAX_AGE, newColId, presetColumn, rateCoverage, RATE_PRESETS,
-  resolveSheet, setAgeRange, sumColumns, waiverCols, type RateColumn, type RateKind, type RateSheet, type ResolvedSheet,
+  resolveSheet, setAgeRange, combineColumns, waiverCols, type RateColumn, type RateKind, type RateSheet, type ResolvedSheet,
 } from "./plan-rates";
 import { shiftRows } from "./sheet-formula";
 import { COLUMN_RECIPES } from "./sheet-snippets";
@@ -128,7 +128,7 @@ export function initialPlan(): PlanState {
     version: 3, productName: "2대질병 진단보험", memo: "", sex, age,
     base: {
       termYears: 0, payYears: 20, freq: 12, interest: 0.025, standardInterest: 0.0325,
-      waiver: true, low: { on: false, ratio: 0.7, lapseRate: 0.03 }, expenses: DEFAULT_EXPENSES,
+      waiver: false, low: { on: false, ratio: 0.7, lapseRate: 0.03 }, expenses: DEFAULT_EXPENSES,
     },
     tabs: [main], active: main.id, open: ["contract"], updatedAt: 0,
   };
@@ -139,10 +139,12 @@ export const waitFactorOf = (months: number) => clamp(1 - months / 12, 0, 1);
 
 export function tabPlanInput(s: PlanState, tab: PlanTab, r: ResolvedSheet): { input: PlanInput; coverages: PlanCoverage[] } {
   const c0 = tabConditions(s, tab);
+  // 탈퇴 사유는 산출방법서의 잔존 식(1 − q − k + q·k/2)으로 묶는다.
+  // 사망형은 탈퇴 사유 전부에 같은 보험금을 준다(종신의 "사망 또는 80% 이상 장해") → 급부 = 탈퇴.
   const coverages: PlanCoverage[] = tab.coverages.map((c) => ({
     id: c.id, label: c.label, kind: c.kind, amount: c.amount, endAge: c.endAge,
-    event: c.kind === "survival" ? [] : columnArray(tab.sheet, r, c.eventColId),
-    exit: sumColumns(tab.sheet, r, c.exitColIds),
+    event: c.kind === "survival" || c.kind === "death" ? [] : columnArray(tab.sheet, r, c.eventColId),
+    exit: combineColumns(tab.sheet, r, c.exitColIds),
     waitFactor: waitFactorOf(c.waitMonths),
     steps: c.steps, points: c.points,
   }));
@@ -150,7 +152,8 @@ export function tabPlanInput(s: PlanState, tab: PlanTab, r: ResolvedSheet): { in
     age: s.age, termYears: c0.termYears > 0 ? c0.termYears : planTermYears(s.age, coverages),
     payYears: c0.payYears, freq: c0.freq,
     interest: c0.interest, standardInterest: c0.standardInterest,
-    waiverRate: c0.waiver ? sumColumns(tab.sheet, r, waiverCols(tab.sheet)) : [],
+    // 납입자수 l′ 는 담보의 탈퇴 사유로 줄고, 여기서 켠 "추가 납입면제 사유"(보장은 이어지고 납입만 멈추는 사유)로 더 준다
+    waiverRate: c0.waiver ? combineColumns(tab.sheet, r, waiverCols(tab.sheet)) : [],
     expenses: c0.expenses,
     lowSurrender: c0.low.on ? { ratio: c0.low.ratio, lapseRate: c0.low.lapseRate } : undefined,
   };
@@ -251,11 +254,11 @@ export function planSteps(s: PlanState, p: ProductResult): PlanStepCard[] {
       summary: [...tab.sheet.columns.map((c) => c.name), ...(changed ? [`주계약과 다름 ${changed}개`] : [])],
       message: err ? `${err.cell} 칸: ${err.code}` : undefined,
       help: "이 탭 시트의 열마다 이름·유형(사망·최초발생·반복지급·기타)·납입면제 포함 여부를 정합니다. 특약 탭에서는 주계약과 같은 이름의 열이 값까지 같은지도 표시합니다." },
-    { id: "waiver", code: "M05", title: "납입면제", status: c0.waiver && waiverIds.length === 0 ? "error" : "done",
+    { id: "waiver", code: "M05", title: "납입자수", status: c0.waiver && waiverIds.length === 0 ? "error" : "done",
       overridden: ov("waiver"),
-      summary: c0.waiver ? (waiverIds.length ? tab.sheet.columns.filter((c) => c.waiver).map((c) => c.name) : ["열 없음"]) : ["미적용"],
-      message: c0.waiver && waiverIds.length === 0 ? "납입면제를 켰지만 이 탭에 납입면제 열이 없습니다. M04에서 열을 지정하세요." : undefined,
-      help: "납입면제로 표시한 열의 합이 납입자 집단 l′의 탈퇴율 f가 됩니다. 기존 장해율을 불러오거나, 다른 열에서 수식으로 만들거나, Excel에서 붙여넣어 쓸 수 있습니다." },
+      summary: c0.waiver ? ["추가 사유: " + (waiverIds.length ? tab.sheet.columns.filter((c) => c.waiver).map((c) => c.name).join(" · ") : "열 없음")] : ["납입자수 = 유지자수"],
+      message: c0.waiver && waiverIds.length === 0 ? "추가 납입면제 사유를 켰지만 이 탭에 납입면제 열이 없습니다. M04에서 열을 지정하세요." : undefined,
+      help: "납입자수 l′ 는 담보의 탈퇴 사유로 유지자수와 똑같이 줄어듭니다 — 사망만 있으면 l′ₓ₊₁ = l′ₓ(1 − q), 사망과 진단이면 l′ₓ₊₁ = l′ₓ(1 − q − k + q·k/2). 50% 이상 장해처럼 보장은 이어지고 납입만 면제되는 사유가 있을 때만 여기서 켜고, 그 열을 M04에서 '납입면제'로 표시합니다." },
   ];
   tab.coverages.forEach((c, i) => {
     const row = r.coverages.find((x) => x.id === c.id);
@@ -321,6 +324,7 @@ function sanitizeSheet(raw: unknown, sex: Sex, age: number): RateSheet {
       kind: RATE_KIND_SET.has(col.kind as string) ? (col.kind as RateKind) : "other",
       waiver: col.waiver === true,
       cells: ages.map((_, i) => String((Array.isArray(col.cells) ? col.cells[i] : undefined) ?? "0")),
+      ...(typeof col.source === "string" && col.source ? { source: col.source.slice(0, 200) } : {}),
     };
   });
   return { ages, columns: columns.length ? columns : defaultSheet(sex, age, ages[ages.length - 1]).columns };
@@ -571,6 +575,8 @@ export interface PlanRecipe { id: string; label: string; need: string; build: (s
 
 function recipe(sex: Sex, age: number, opts: {
   name: string; presets: string[]; endAge: number;
+  /** 이 프리셋으로 만든 열은 납입면제(추가 납입자 탈퇴 사유)로 표시한다 */
+  waiverPresets?: string[];
   covers: (sheet: RateSheet) => PlanCoverageState[];
   conditions?: Partial<TabConditions>;
   riders?: { name: string; presets: string[]; endAge: number; covers: (sheet: RateSheet) => PlanCoverageState[]; overrides?: Partial<TabConditions> }[];
@@ -578,7 +584,10 @@ function recipe(sex: Sex, age: number, opts: {
   const def = initialPlan();
   const makeSheet = (presets: string[], endAge: number): RateSheet => {
     const ages = Array.from({ length: Math.max(1, endAge - age + 1) }, (_, i) => age + i);
-    return { ages, columns: presets.map((id) => presetColumn(RATE_PRESETS.find((p) => p.id === id)!, sex, ages)) };
+    return { ages, columns: presets.map((id) => {
+      const col = presetColumn(RATE_PRESETS.find((p) => p.id === id)!, sex, ages);
+      return opts.waiverPresets?.includes(id) ? { ...col, waiver: true } : col;
+    }) };
   };
   const mainSheet = makeSheet(opts.presets, opts.endAge);
   const tabs: PlanTab[] = [{ id: newId(), name: "주계약", sheet: mainSheet, coverages: opts.covers(mainSheet), overrides: {} }];
@@ -592,37 +601,41 @@ function recipe(sex: Sex, age: number, opts: {
 const col = (sheet: RateSheet, kind: RateKind, skip = 0) => sheet.columns.filter((c) => c.kind === kind)[skip]?.id ?? sheet.columns[0].id;
 
 export const PLAN_RECIPES: PlanRecipe[] = [
-  { id: "twoMajor", label: "2대질병 진단 (80세 만기)", need: "2대질병 발생률 + 사망률 + 납입면제율",
-    build: (sex, age) => recipe(sex, age, { name: "2대질병 진단보험", presets: ["kli7", "waiver", "twoMajor"], endAge: 80,
+  { id: "twoMajor", label: "2대질병 진단 (80세 만기)", need: "2대질병 발생률 + 사망률",
+    build: (sex, age) => recipe(sex, age, { name: "2대질병 진단보험", presets: ["kli7", "twoMajor"], endAge: 80,
       covers: (sh) => [newCoverage(sh, "incidence", { label: "2대질병 진단", amount: 3e7, endAge: 80, eventColId: col(sh, "incidence") })] }) },
-  { id: "term", label: "정기 사망 (60세 만기)", need: "사망률 + 납입면제율",
-    build: (sex, age) => recipe(sex, age, { name: "정기보험", presets: ["kli7", "waiver"], endAge: 60,
+  { id: "term", label: "정기 사망 (60세 만기)", need: "사망률",
+    build: (sex, age) => recipe(sex, age, { name: "정기보험", presets: ["kli7"], endAge: 60,
       covers: (sh) => [newCoverage(sh, "death", { label: "사망", amount: 1e8, endAge: 60, eventColId: col(sh, "death") })] }) },
-  { id: "whole", label: "종신 사망 (110세)", need: "사망률 + 납입면제율",
-    build: (sex, age) => recipe(sex, age, { name: "종신보험", presets: ["kli7", "waiver"], endAge: 110,
-      covers: (sh) => [newCoverage(sh, "death", { label: "사망", amount: 1e8, endAge: 110, eventColId: col(sh, "death") })] }) },
+  { id: "whole", label: "종신 사망·80% 장해 (110세)", need: "사망률 + 80% 이상 장해율",
+    build: (sex, age) => recipe(sex, age, { name: "종신보험", presets: ["kli7", "dis80"], endAge: 110,
+      // 사망 또는 80% 이상 장해 시 같은 보험금 — 한 담보로 두고 두 열을 탈퇴(= 급부) 사유로 묶는다
+      covers: (sh) => [newCoverage(sh, "death", { label: "사망·80% 이상 장해", amount: 1e8, endAge: 110,
+        eventColId: col(sh, "death"), exitColIds: sh.columns.map((c) => c.id) })] }) },
   { id: "decreasing", label: "체감형 정기 (60세부터 절반)", need: "사망률 + 연령 구간 배수",
-    build: (sex, age) => recipe(sex, age, { name: "체감형 정기보험", presets: ["kli7", "waiver"], endAge: 80,
+    build: (sex, age) => recipe(sex, age, { name: "체감형 정기보험", presets: ["kli7"], endAge: 80,
       covers: (sh) => [newCoverage(sh, "death", { label: "사망(체감)", amount: 1e8, endAge: 80, eventColId: col(sh, "death"),
         steps: [{ fromAge: age, toAge: 59, multiple: 1 }, { fromAge: 60, toAge: 80, multiple: 0.5 }] })] }) },
   { id: "cancerSet", label: "암 진단(주계약) + 암입원 특약", need: "암발생률 + 암입원 기대일수 + 사망률",
-    build: (sex, age) => recipe(sex, age, { name: "암보험", presets: ["kli7", "waiver", "cancer"], endAge: 100,
+    build: (sex, age) => recipe(sex, age, { name: "암보험", presets: ["kli7", "cancer"], endAge: 100,
       covers: (sh) => [newCoverage(sh, "incidence", { label: "암 진단", amount: 5e7, endAge: 100, waitMonths: 3, eventColId: col(sh, "incidence") })],
-      riders: [{ name: "특약1 암입원", presets: ["kli7", "waiver", "cancerHosp"], endAge: 100,
+      riders: [{ name: "특약1 암입원", presets: ["kli7", "cancerHosp"], endAge: 100,
         covers: (sh) => [newCoverage(sh, "daily", { label: "암 입원", amount: 1e5, endAge: 100, waitMonths: 3, eventColId: col(sh, "recurring") })] }] }) },
   { id: "maturity", label: "진단 + 만기환급금", need: "발생률 + 지급 시점",
-    build: (sex, age) => recipe(sex, age, { name: "만기환급형 진단보험", presets: ["kli7", "waiver", "twoMajor"], endAge: age + 19,
+    build: (sex, age) => recipe(sex, age, { name: "만기환급형 진단보험", presets: ["kli7", "twoMajor"], endAge: age + 19,
       conditions: { payYears: 20, termYears: 20 },
       covers: (sh) => [
         newCoverage(sh, "incidence", { label: "2대질병 진단", amount: 3e7, endAge: age + 19, eventColId: col(sh, "incidence") }),
         newCoverage(sh, "survival", { label: "만기환급금", amount: 1e7, endAge: age + 19, points: [{ age: age + 20, multiple: 1 }] }),
       ] }) },
-  { id: "waiverSupport", label: "납입면제(보험료납입지원) 적용 3대질병", need: "3대질병 발생률 + 납입면제 발생률(고도후유장해+3대질병)",
-    build: (sex, age) => recipe(sex, age, { name: "보험료납입지원 적용 3대질병보험", presets: ["kli7", "waiverSupport", "threeMajor"], endAge: 80,
-      conditions: { payYears: 20 },
+  // 3대질병 진단은 이미 탈퇴 사유라 납입도 멈춘다. 납입지원 특약이 더하는 것은 고도후유장해(80% 이상)뿐이다
+  { id: "waiverSupport", label: "납입면제(보험료납입지원) 적용 3대질병", need: "3대질병 발생률 + 80% 이상 장해율(추가 납입면제)",
+    build: (sex, age) => recipe(sex, age, { name: "보험료납입지원 적용 3대질병보험", presets: ["kli7", "threeMajor", "dis80"], endAge: 80,
+      waiverPresets: ["dis80"],
+      conditions: { payYears: 20, waiver: true },
       covers: (sh) => [newCoverage(sh, "incidence", { label: "3대질병 진단", amount: 3e7, endAge: 80, eventColId: col(sh, "incidence") })] }) },
   { id: "noRefund", label: "무해지환급형 진단 (해지율 3%)", need: "발생률 + 환급률 0 + 해지율",
-    build: (sex, age) => recipe(sex, age, { name: "무해지환급형 진단보험", presets: ["kli7", "waiver", "twoMajor"], endAge: 80,
+    build: (sex, age) => recipe(sex, age, { name: "무해지환급형 진단보험", presets: ["kli7", "twoMajor"], endAge: 80,
       conditions: { low: { on: true, ratio: 0, lapseRate: 0.03 } },
       covers: (sh) => [newCoverage(sh, "incidence", { label: "2대질병 진단(무해지)", amount: 3e7, endAge: 80, eventColId: col(sh, "incidence") })] }) },
 ];

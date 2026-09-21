@@ -3,6 +3,7 @@ import kli7 from "@/lib/engine/data/rates-kli7.json";
 import cancerRates from "@/lib/engine/data/rates-cancer.json";
 import cancerHosp from "@/lib/engine/data/rates-cancer-hosp.json";
 import ciRates from "@/lib/engine/data/rates-ci.json";
+import dis80Rates from "@/lib/engine/data/rates-dis80.json";
 import type { RateTable, Sex } from "@/lib/engine";
 import { colLetter, evaluateSheet, type CellError, type SheetValues } from "./sheet-formula";
 
@@ -11,6 +12,7 @@ const TABLE = kli7 as RateTable;
 const CANCER = cancerRates as RateTable;
 const HOSP = cancerHosp as { M: number[]; F: number[] };
 const CI = ciRates as { stroke: { M: number[]; F: number[] }; ami: { M: number[]; F: number[] } };
+const DIS80 = dis80Rates as { M: number[]; F: number[] };
 
 /**
  * 위험률 유형. 담보·납입면제와 어떻게 이어지는지를 이 값이 정한다.
@@ -30,7 +32,7 @@ export const RATE_KINDS: { kind: RateKind; label: string; hint: string }[] = [
 export const kindLabel = (k: RateKind) => RATE_KINDS.find((x) => x.kind === k)?.label ?? k;
 
 /** 시트의 열 하나. cells[r]는 원본 입력(숫자 또는 `=수식`) */
-export interface RateColumn { id: string; name: string; kind: RateKind; waiver: boolean; cells: string[] }
+export interface RateColumn { id: string; name: string; kind: RateKind; waiver: boolean; cells: string[]; /** 불러온 표의 근거(산출방법서에 싣는다) */ source?: string }
 /** A열 = 연령(읽기 전용), B열부터 columns */
 export interface RateSheet { ages: number[]; columns: RateColumn[] }
 
@@ -80,17 +82,25 @@ export function toAgeArray(ages: number[], values: number[]): number[] {
   return out;
 }
 
-/** 여러 열을 더한 연령 인덱스 배열(탈퇴율·납입면제율은 열의 합) */
-export function sumColumns(s: RateSheet, r: ResolvedSheet, ids: string[]): number[] {
-  const out = new Array<number>(MAX_AGE + 1).fill(0);
-  for (const id of ids) {
-    const vals = r.byId[id];
-    if (!vals) continue;
-    const arr = toAgeArray(s.ages, vals);
-    for (let a = 0; a <= MAX_AGE; a++) out[a] += arr[a];
-  }
-  return out;
+/**
+ * 여러 탈퇴 사유를 하나의 탈퇴율로 묶는다. 산출방법서의 잔존 식을 그대로 따른다:
+ *   사유 하나      1 − q
+ *   사유 둘        1 − q − k + q·k/2
+ *   사유 셋 이상   1 − Σd + Σ_{i<j} dᵢ·dⱼ / 2
+ * 돌려주는 값은 탈퇴율(= 1 − 잔존율)이며 1 을 넘지 않는다(사망률이 1 인 나이).
+ */
+export function combineDecrements(arrs: number[][]): number[] {
+  const len = Math.max(0, ...arrs.map((a) => a.length));
+  return Array.from({ length: len }, (_, i) => {
+    let sum = 0, sq = 0;
+    for (const a of arrs) { const d = a[i] ?? 0; sum += d; sq += d * d; }
+    return Math.min(1, sum - (sum * sum - sq) / 4);      // Σ_{i<j} dᵢdⱼ = (Σ² − Σd²)/2
+  });
 }
+
+/** 여러 열을 탈퇴율로 묶은 연령 인덱스 배열 */
+export const combineColumns = (s: RateSheet, r: ResolvedSheet, ids: string[]) =>
+  combineDecrements(ids.filter((id) => r.byId[id]).map((id) => toAgeArray(s.ages, r.byId[id])));
 
 /** 한 열의 연령 인덱스 배열 */
 export const columnArray = (s: RateSheet, r: ResolvedSheet, id: string) =>
@@ -162,47 +172,51 @@ const at = (arr: number[], i: number) => arr[i] ?? arr[arr.length - 1] ?? 0;
 /** 표에 넣는 값은 10자리에서 끊는다 — 0.65를 곱한 뒤 0.0015500999999999999 같은 찌꺼기가 칸에 보이지 않게 */
 export const roundRate = (x: number) => Math.round(x * 1e10) / 1e10;
 
-export interface RatePreset { id: string; label: string; kind: RateKind; waiver: boolean; note: string; values: (sex: Sex, ages: number[]) => number[] }
+export interface RatePreset { id: string; label: string; kind: RateKind; waiver: boolean; note: string; /** 산출방법서에 싣는 근거. 없으면 note */ source?: string; values: (sex: Sex, ages: number[]) => number[] }
 
 /** 기존 산출에 쓰는 표를 열로 불러온다 — 설계형 상품과 같은 위험률로 일반 상품을 만들 수 있다 */
 export const RATE_PRESETS: RatePreset[] = [
-  { id: "kli7", label: "제7회 경험생명표 사망률 q", kind: "death", waiver: false, note: "설계형 종신보험과 같은 표",
+  { id: "kli7", label: "제7회 경험생명표 사망률 q", kind: "death", waiver: false, note: "설계형 종신보험과 같은 표", source: "보험개발원 제7회 경험생명표 사망률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].q, a))) },
-  { id: "kli7Std", label: "제7회 표준사망률 q_std", kind: "death", waiver: false, note: "표준책임준비금 기준",
+  { id: "kli7Std", label: "제7회 표준사망률 q_std", kind: "death", waiver: false, note: "표준책임준비금 기준", source: "제7회 경험생명표 기준 표준사망률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].qStd, a))) },
-  { id: "waiver", label: "납입면제 발생률 f (장해 50% 이상)", kind: "other", waiver: true, note: "제7회 경험생명표. 납입면제 열로 들어갑니다",
+  { id: "waiver", label: "납입면제 발생률 f (장해 50% 이상)", kind: "other", waiver: true, note: "제7회 경험생명표. 납입면제 열로 들어갑니다", source: "제7회 경험생명표 50% 이상 장해 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].f, a))) },
-  { id: "cancer", label: "암발생률 (생명장기제2024-112호)", kind: "incidence", waiver: false, note: "제공받은 실제 값",
+  { id: "cancer", label: "암발생률 (생명장기제2024-112호)", kind: "incidence", waiver: false, note: "제공받은 실제 값", source: "보험개발원 생명장기제2024-112호 무배당 예정 경험 암발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a))) },
   { id: "cancerHosp", label: "암입원 연간 기대일수 (암입원율 × 365)", kind: "recurring", waiver: false, note: "제공받은 실제 값. 일당형 담보용",
     values: (s, ages) => ages.map((a) => roundRate(at(HOSP[s], a) * 365)) },
-  { id: "stroke", label: "뇌출혈 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~84세, 그 뒤는 84세 값 유지)",
+  { id: "stroke", label: "뇌출혈 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~84세, 그 뒤는 84세 값 유지)", source: "무배당 예정 뇌출혈 발생률 (제공 자료, 0~84세)",
     values: (s, ages) => ages.map((a) => roundRate(at(CI.stroke[s], a))) },
-  { id: "ami", label: "급성심근경색증 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~79세, 그 뒤는 79세 값 유지)",
+  { id: "ami", label: "급성심근경색증 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~79세, 그 뒤는 79세 값 유지)", source: "무배당 예정 급성심근경색증 발생률 (제공 자료, 0~79세)",
     values: (s, ages) => ages.map((a) => roundRate(at(CI.ami[s], a))) },
   { id: "twoMajor", label: "2대질병 발생률 (뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "제공받은 두 발생률의 합",
     values: (s, ages) => ages.map((a) => roundRate(at(CI.stroke[s], a) + at(CI.ami[s], a))) },
   { id: "threeMajor", label: "3대질병 발생률 (암 + 뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "제공받은 세 발생률의 합",
     values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
+  // 종신보험은 "사망 또는 80% 이상 장해" 에 같은 보험금을 준다 — 사망률과 함께 탈퇴·급부 열로 쓴다
+  { id: "dis80", label: "80% 이상 장해율 (재해 + 질병)", kind: "incidence", waiver: false,
+    note: "써미트 2014-59호 80%이상 재해장해 + 질병장해발생율 (MG 더블종신공제Ⅱ)",
+    values: (s, ages) => ages.map((a) => roundRate(at(DIS80[s], a))) },
   // 메리츠 「보험료납입지원 특별약관」 산출방법서의 지급사유 구성(고도후유장해 + 3대질병 진단)을 본떴다.
   // 그 방법서의 탈퇴율은 후유장해발생률(80%이상)·암·뇌졸중·급성심근경색증발생률의 합이다.
-  // 여기서는 80%이상 장해율이 없어 제7회 장해 50%이상 발생률로 대신한다 — 실제보다 넓어 보험료가 조금 크게 나온다.
-  { id: "waiverSupport", label: "납입면제 발생률 (고도후유장해 + 3대질병)", kind: "other", waiver: true,
-    note: "메리츠 보험료납입지원 특약 구성. 장해는 제7회 50%이상 발생률로 대신(80%이상보다 넓음)",
-    values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].f, a) + at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
+  { id: "waiverSupport", label: "납입면제 사유 (고도후유장해 + 3대질병)", kind: "other", waiver: true,
+    note: "메리츠 보험료납입지원 특약 구성. 80% 이상 장해 + 암 + 뇌출혈 + 급성심근경색증",
+    values: (s, ages) => ages.map((a) => roundRate(at(DIS80[s], a) + at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
   { id: "blank", label: "빈 열 (직접 입력·수식)", kind: "other", waiver: false, note: "0으로 채우고 셀에 값이나 수식을 넣습니다",
     values: (_s, ages) => ages.map(() => 0) },
 ];
 
 export function presetColumn(p: RatePreset, sex: Sex, ages: number[]): RateColumn {
-  return { id: newColId(), name: p.label.replace(/\s*\(.*\)$/, ""), kind: p.kind, waiver: p.waiver, cells: p.values(sex, ages).map(String) };
+  return { id: newColId(), name: p.label.replace(/\s*\(.*\)$/, ""), kind: p.kind, waiver: p.waiver, cells: p.values(sex, ages).map(String),
+    source: p.id === "blank" ? undefined : p.source ?? p.note };
 }
 
-/** 첫 화면 기본 시트: 사망률 + 납입면제율 + 2대질병 발생률 */
+/** 첫 화면 기본 시트: 사망률 + 2대질병 발생률 (납입자수는 두 사유로 줄어든다) */
 export function defaultSheet(sex: Sex, from: number, to: number): RateSheet {
   const ages = Array.from({ length: Math.max(1, to - from + 1) }, (_, i) => from + i);
   const pick = (id: string) => presetColumn(RATE_PRESETS.find((p) => p.id === id)!, sex, ages);
-  return { ages, columns: [pick("kli7"), pick("waiver"), pick("twoMajor")] };
+  return { ages, columns: [pick("kli7"), pick("twoMajor")] };
 }
 
 /** 연령 범위를 바꾼다. 이미 있는 나이의 입력(수식 포함)은 그대로 옮긴다 */

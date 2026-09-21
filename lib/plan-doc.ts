@@ -16,6 +16,9 @@ export { docToHtml, docToMarkdown, isNumericCell, type DocBlock, type DocSection
 const ROLE: Record<RateKind, RateRole> = { death: "death", incidence: "incidence", recurring: "recurring", other: "other" };
 const BENEFIT_ROLE = { death: "death", incidence: "incidence", daily: "recurring", survival: "other" } as const;
 const won = (x: number) => wonExact(Math.round(x));
+/** 열 이름을 지급 사유 낱말로 — "제7회 경험생명표 사망률 q" → "사망", "80% 이상 장해율" → "80% 이상 장해" */
+const shortName = (c: { kind: RateKind; name: string }) => (c.kind === "death" ? "사망" : c.name.replace(/\s*(발생)?[율률]\s*[a-zA-Z]?$/, ""));
+
 /** 급부 유형별 지급 사유 문구 */
 const TRIGGER = Object.fromEntries(BENEFIT_KINDS.map((k) => [k.kind, k.kind === "incidence" ? "진단 확정 시" : k.unit])) as Record<(typeof BENEFIT_KINDS)[number]["kind"], string>;
 
@@ -42,7 +45,7 @@ export function planToSpec(s: PlanState, p: ProductResult): MethodSpec {
         id: `${tab.id}:${c.id}`,
         name: s.tabs.length > 1 ? `${tab.name} · ${c.name}` : c.name,
         role: c.waiver ? "waiver" : ROLE[c.kind],
-        source: formulas.length ? `시트 수식 ${formulas.length}칸 (예: ${formulas[0]})` : "시트 직접 입력·표",
+        source: [c.source, formulas.length ? `시트 수식 ${formulas.length}칸 (예: ${formulas[0]})` : ""].filter(Boolean).join(" · ") || "시트 직접 입력·표",
         table: { ages: [...tab.sheet.ages], values: [...(tr?.sheet.byId[c.id] ?? [])], sex: s.sex },
       };
       spec.rates.push(ref);
@@ -55,11 +58,13 @@ export function planToSpec(s: PlanState, p: ProductResult): MethodSpec {
     for (const c of tab.coverages) {
       const id = `${tab.id}:${c.id}`;
       benefitIds.push(id);
+      const exitCols = c.exitColIds.map((x) => tab.sheet.columns.find((y) => y.id === x)).filter((y) => !!y);
       const b: BenefitSpec = {
-        id, name: c.label, unit: tab.name, role: BENEFIT_ROLE[c.kind], trigger: TRIGGER[c.kind],
+        id, name: c.label, unit: tab.name, role: BENEFIT_ROLE[c.kind],
+        trigger: c.kind === "death" && exitCols.length > 1 ? `${exitCols.map(shortName).join(" 또는 ")} 시` : TRIGGER[c.kind],
         amount: c.amount, endAge: c.endAge,
         waitDays: c.waitMonths ? Math.round(c.waitMonths * 30.4) : undefined,
-        rateId: c.kind === "survival" ? undefined : `${tab.id}:${c.eventColId}`,
+        rateId: c.kind === "survival" || c.kind === "death" ? undefined : `${tab.id}:${c.eventColId}`,   // 사망형은 급부 = 탈퇴
         exitRateIds: c.exitColIds.map((x) => `${tab.id}:${x}`),
         steps: c.steps.length ? c.steps : undefined,
         points: c.points.length ? c.points : undefined,
@@ -120,16 +125,12 @@ function formulaSpecs(s: PlanState): MethodSpec["formulas"] {
   const meth = s.base.expenses.model === "method";
   const low = s.base.low.on;
   const out: MethodSpec["formulas"] = [
-    { section: "계산기수", label: "생존자 수", text:
-      "l_x = l′_x = 100,000\n" +
-      "l_{x+t+1} = l_{x+t} · ( 1 − q_{x+t} − w_{x+t} + q_{x+t}·w_{x+t}/2 )\n" +
-      "l′_{x+t+1} = l′_{x+t} · ( 1 − q_{x+t} − f_{x+t} − w_{x+t} + ( q·f + q·w + f·w )_{x+t}/2 )",
-      note: "q는 탈퇴율(그 담보가 소멸하는 사유 전부), g는 급부 발생률이다. 사망보장은 둘이 같고, 진단형은 q = 사망률 + 발생률, g = 발생률로 갈라진다." },
+    ...survivorFormulas(s),
     { section: "계산기수", label: "계산기수", text:
       "D_{x+t} = l_{x+t}·v^t    D′_{x+t} = l′_{x+t}·v^t\n" +
       "C_{x+t} = l_{x+t}·g_{x+t}·( 1 − w_{x+t}/2 )·v^{t+½}    W_{x+t} = l_{x+t}·w_{x+t}·v^{t+½}\n" +
       "N_{x+t} = Σ_{u≥t} D_{x+u}    N′_{x+t} = Σ_{u≥t} D′_{x+u}",
-      note: "q·(1−w/2) + w = q + w − q·w/2 이므로 급부 탈퇴와 해지 탈퇴의 합이 l_{x+t} − l_{x+t+1}과 정확히 일치한다." },
+      note: "g 는 위 담보별 식의 급부 발생률이다. Q·(1−w/2) + w = Q + w − Q·w/2 이므로 급부·해지 탈퇴의 합이 l_{x+t} − l_{x+t+1} 과 정확히 일치한다." },
     { section: "보험료의 계산", label: "급부 현가와 납입기수", text:
       "PVB = Σ_{t=0}^{n−1} S_t·C_{x+t} + Σ_{t=0}^{n} C_t·D_{x+t}\n" +
       "N* = mm · [ ( N′_x − N′_{x+m} ) − ( mm−1 )/( 2·mm )·( D′_x − D′_{x+m} ) ]" },
@@ -155,6 +156,89 @@ function formulaSpecs(s: PlanState): MethodSpec["formulas"] {
       "W^표준_t = max( V_t − 해약공제_t, 0 )" + (low ? `\n납입기간 중: W_t = ${Math.round(s.base.low.ratio * 100)}% × W^표준_t        납입 완료 후: W_t = W^표준_t` : "") },
     { section: "해지환급금의 계산", label: "환급률", text: "환급률_t = W_t / 납입누계_t,   납입누계_t = min(t, m) × mm × G" },
   );
+  return out;
+}
+
+/** 1 − Σd + Σ_{i<j} dᵢ·dⱼ/2 를 기호로 적는다. 사유 하나면 1 − d, 둘이면 1 − q − k + q·k/2 */
+function survivalText(syms: string[]): string {
+  const at = (x: string) => `${x}_{x+t}`;
+  if (!syms.length) return "1";
+  if (syms.length === 1) return `1 − ${at(syms[0])}`;
+  const pairs: string[] = [];
+  for (let i = 0; i < syms.length; i++) for (let j = i + 1; j < syms.length; j++) pairs.push(`${at(syms[i])}·${at(syms[j])}`);
+  return `1 − ${syms.map(at).join(" − ")} + ${pairs.length === 1 ? pairs[0] : `( ${pairs.join(" + ")} )`}/2`;
+}
+
+/** 1 − (잔존 식) — 사유 둘이면 q + k − q·k/2 */
+function lossText(syms: string[]): string {
+  const at = (x: string) => `${x}_{x+t}`;
+  const pairs: string[] = [];
+  for (let i = 0; i < syms.length; i++) for (let j = i + 1; j < syms.length; j++) pairs.push(`${at(syms[i])}·${at(syms[j])}`);
+  return `${syms.map(at).join(" + ")}${pairs.length ? ` − ${pairs.length === 1 ? pairs[0] : `( ${pairs.join(" + ")} )`}/2` : ""}`;
+}
+
+/**
+ * 담보별 유지자수·납입자수·급부 발생자 — 기존 산출방법서처럼 "율"이 아니라 "~를 제외한 생존자수"로 적는다.
+ * 사망만: l′ₓ₊ₜ₊₁ = l′ₓ₊ₜ(1 − q) · 사망과 진단: (1 − q − k + q·k/2) · 따로 둔 납입면제 사유가 있으면 f 로 더 준다.
+ */
+function survivorFormulas(s: PlanState): MethodSpec["formulas"] {
+  const out: MethodSpec["formulas"] = [];
+  const multi = s.tabs.length > 1 || s.tabs[0].coverages.length > 1;
+  for (const tab of s.tabs) {
+    const cond = tabConditions(s, tab);
+    const lapse = cond.low.on && cond.low.lapseRate > 0;
+    const waivers = cond.waiver ? tab.sheet.columns.filter((c) => c.waiver) : [];
+    for (const c of tab.coverages) {
+      const cols = c.exitColIds.map((x) => tab.sheet.columns.find((y) => y.id === x)).filter((y) => !!y);
+      // 기호: 사망 계열은 q, 나머지는 k — 같은 계열이 둘 이상이면 위첨자 번호
+      const count = { q: cols.filter((x) => x.kind === "death").length, k: cols.filter((x) => x.kind !== "death").length };
+      const seen = { q: 0, k: 0 };
+      const syms = cols.map((x) => {
+        const b = x.kind === "death" ? "q" : "k";
+        seen[b]++;
+        return count[b] > 1 ? `${b}^{(${seen[b]})}` : b;
+      });
+      const legend = cols.map((x, i) => `${syms[i]}_x : ${x.name}`);
+      if (waivers.length) legend.push(`f_x : ${waivers.map((x) => x.name).join(" · ")}${waivers.length > 1 ? " (같은 잔존 식으로 결합)" : ""} — 납입만 면제되는 사유`);
+      if (lapse) legend.push("w_x : 적용해지율 (납입기간 중)");
+
+      const lines: string[] = [];
+      const Q = syms.length === 1 ? `${syms[0]}_{x+t}` : "Q_{x+t}";
+      if (syms.length > 1 && (lapse || waivers.length)) lines.push(`탈퇴율  Q_{x+t} = ${lossText(syms)}`);
+      const keep = lapse ? `1 − ${Q} − w_{x+t} + ${Q}·w_{x+t}/2` : survivalText(syms);
+      lines.push(`유지자수  l_{x+t+1} = l_{x+t} × ( ${keep} )`);
+      if (waivers.length) {
+        const pay = lapse
+          ? `1 − ${Q} − f_{x+t} − w_{x+t} + ( ${Q}·f_{x+t} + ${Q}·w_{x+t} + f_{x+t}·w_{x+t} )/2`
+          : `1 − ${Q} − f_{x+t} + ${Q}·f_{x+t}/2`;
+        lines.push(`납입자수  l′_{x+t+1} = l′_{x+t} × ( ${pay} )`);
+      } else {
+        lines.push(`납입자수  l′_{x+t+1} = l′_{x+t} × ( ${keep} )        → l′_{x+t} = l_{x+t}`);
+      }
+      const half = lapse ? "·( 1 − w_{x+t}/2 )" : "";
+      if (c.kind === "death") {
+        lines.push(lapse
+          ? `급부 발생자  C_{x+t} = l_{x+t}·${Q}${half}·v^{t+½}`
+          : `급부 발생자  C_{x+t} = ( l_{x+t} − l_{x+t+1} )·v^{t+½}`);
+      } else if (c.kind === "incidence") {
+        const ev = cols.findIndex((x) => x.id === c.eventColId);
+        const g = ev >= 0 ? syms[ev] : "g";
+        lines.push(`급부 발생자  C_{x+t} = l_{x+t}·${g}_{x+t}${half}·v^{t+½}`);
+      } else if (c.kind === "daily") {
+        lines.push(`급부  C_{x+t} = l_{x+t}·g_{x+t}${half}·v^{t+½}        (g : 연간 기대 지급일수)`);
+      }
+
+      const why = c.kind === "death" && cols.length > 1
+        ? `${cols.map(shortName).join("·")} 모두 같은 보험금을 지급하므로 탈퇴자 전부가 급부 대상이다. `
+        : c.kind === "incidence" ? "진단 확정 시 지급하고 그 담보는 소멸한다. " : "";
+      out.push({
+        section: "계산기수",
+        label: multi ? `유지자수·납입자수 — ${tab.name} ${c.label}` : `유지자수·납입자수 — ${c.label}`,
+        text: [...legend, "", "l_x = l′_x = 100,000", ...lines].join("\n"),
+        note: `${why}납입자수 l′ 는 ${waivers.length ? "탈퇴 사유에 더해 f 사유 발생 시에도" : "탈퇴 사유로 유지자수와 똑같이"} 줄어든다 — 별도의 납입면제율을 곱하지 않는다.`,
+      });
+    }
+  }
   return out;
 }
 
@@ -201,7 +285,7 @@ export function resultSections(s: PlanState, p: ProductResult): DocSection[] {
         ...s.tabs.map((t) => [`${t.name} 면책·증액`, t.coverages.map((c) =>
           `${c.label}${c.waitMonths ? ` 면책 ${c.waitMonths}개월(첫해 ${waitFactorOf(c.waitMonths)})` : ""}${c.steps.length ? ` 구간 ${c.steps.length}개` : ""}`).join(" / ")]),
       ] },
-      { t: "note", text: "이 산출은 설계형 상품(종신·암)과 같은 엔진을 쓴다. 사망형 담보 하나로 만든 계약은 설계형 산출과 10만원당 보험료·준비금·환급금·환급률이 완전히 일치한다(회귀 테스트로 고정)." },
+      { t: "note", text: "이 산출은 설계형 상품(종신·암)과 같은 엔진을 쓴다. 사망률 하나만 탈퇴 사유로 둔 사망형 담보는 설계형 산출과 10만원당 보험료·준비금·환급금·환급률이 완전히 일치한다(회귀 테스트로 고정)." },
     ] },
   ];
 }

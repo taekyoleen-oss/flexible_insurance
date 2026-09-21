@@ -189,10 +189,11 @@ function WaiverBody() {
       <Inherited keys={["waiver"]} />
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" className="accent-sky" checked={cond.waiver} onChange={(e) => dispatch({ type: "conditions", patch: { waiver: e.target.checked } })} />
-        납입면제 적용
+        추가 납입면제 사유 적용
       </label>
       <p className="text-xs text-navy/55">
-        납입면제 체크를 켠 열의 합이 납입자 집단 l′의 탈퇴율 f가 됩니다. 급부집단 l은 그대로라 보장은 계속됩니다.
+        납입자수 l′ 는 담보의 탈퇴 사유로 유지자수 l 과 똑같이 줄어듭니다(사망만이면 1 − q, 사망과 진단이면 1 − q − k + q·k/2).
+        여기서는 보장은 이어지고 납입만 면제되는 사유(예: 50% 이상 장해)가 있을 때만 켭니다 — 체크한 열이 f 가 되어 l′ 만 더 줄입니다.
       </p>
       <ul className="space-y-1">
         {tab.sheet.columns.map((c, i) => (
@@ -205,8 +206,8 @@ function WaiverBody() {
           </li>
         ))}
       </ul>
-      {cols.length > 0 && <p className="text-[11px] text-navy/50">f = {cols.map((c) => c.name).join(" + ")}</p>}
-      <p className="text-[11px] text-navy/50">표가 없으면 왼쪽 시트에서 &quot;납입면제 발생률 f&quot; 열을 불러오거나, 수식(예: <span className="font-mono">=B3*0.5</span>)으로 만들거나, Excel에서 붙여넣으세요.</p>
+      {cols.length > 0 && <p className="text-[11px] text-navy/50">f = {cols.map((c) => c.name).join(" ⊕ ")} (같은 잔존 식으로 결합)</p>}
+      <p className="text-[11px] text-navy/50">사유 표가 필요하면 왼쪽 시트에서 &quot;납입면제 발생률 f (장해 50% 이상)&quot;·&quot;80% 이상 장해율&quot; 열을 불러오거나, 수식이나 Excel 붙여넣기로 만드세요.</p>
     </div>
   );
 }
@@ -238,7 +239,12 @@ function CoverageBody({ id }: { id: string }) {
         <Field label="면책기간 (개월)" hint={c.waitMonths > 0 ? `첫해 급부 ${Math.round((1 - c.waitMonths / 12) * 100)}%` : "없음"}>
           <NumInput value={c.waitMonths} min={0} max={24} onCommit={(v) => set({ waitMonths: Math.max(0, Math.round(v)) })} />
         </Field>
-        {c.kind !== "survival" && (
+        {c.kind === "death" && (
+          <Field label="급부" hint="사망형">
+            <p className="py-1 text-xs text-navy/60">탈퇴 사유 전부에 같은 보험금 (예: 사망 또는 80% 이상 장해)</p>
+          </Field>
+        )}
+        {c.kind !== "survival" && c.kind !== "death" && (
           <Field label="급부 열" hint={`${letterOf(c.eventColId)}열`}>
             <Select value={c.eventColId} onChange={(e) => set({ eventColId: e.target.value })}>
               {tab.sheet.columns.map((x, i) => <option key={x.id} value={x.id}>{colLetter(i + 1)} · {x.name} ({kindLabel(x.kind)})</option>)}
@@ -248,8 +254,8 @@ function CoverageBody({ id }: { id: string }) {
       </div>
 
       <div>
-        <p className="text-xs font-medium text-navy/70">탈퇴 열 (합산)</p>
-        <p className="mb-1 text-[11px] text-navy/50">이 담보를 소멸시키는 사유 전부. 최초발생 열은 넣고, 반복지급 열은 넣지 않습니다.</p>
+        <p className="text-xs font-medium text-navy/70">탈퇴 열 (유지자수·납입자수)</p>
+        <p className="mb-1 text-[11px] text-navy/50">이 담보를 소멸시키는 사유 전부. 두 사유면 l<sub>x+1</sub> = l<sub>x</sub>(1 − q − k + q·k/2) 로 묶고, 납입자수도 같은 식으로 줄어듭니다. 최초발생 열은 넣고, 반복지급 열은 넣지 않습니다.</p>
         <div className="flex flex-wrap gap-2">
           {tab.sheet.columns.map((x, i) => (
             <label key={x.id} className="flex items-center gap-1 rounded border border-navy/10 px-1.5 py-0.5 text-xs text-navy/70">
