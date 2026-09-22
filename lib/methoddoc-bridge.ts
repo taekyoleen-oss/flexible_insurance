@@ -5,7 +5,7 @@ import {
 import type { RateColumn, RateKind, RateSheet } from "./plan-rates";
 import type { BenefitKind, Expenses, ExpensesMethod } from "./engine";
 import { planToSpec } from "./plan-doc";
-import { emptySpec, type BenefitSpec, type BasisSpec, type ContractSpec, type Evidence, type ExpenseItem, type MethodSpec, type RateRef, type RateRole } from "./methoddoc/spec";
+import { emptySpec, rateTable, type BenefitSpec, type BasisSpec, type ContractSpec, type Evidence, type ExpenseItem, type MethodSpec, type RateRef, type RateRole, type Sex } from "./methoddoc/spec";
 
 /**
  * methoddoc 모듈(앱 독립) ↔ 이 앱의 저장소를 잇는 다리.
@@ -75,12 +75,6 @@ export function applySpecToPlan(spec: MethodSpec, accepted: Evidence[]): number 
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
   if (take.has("meta.productName") && spec.meta.productName) { s.productName = spec.meta.productName.slice(0, 60); count++; }
-  if (take.has("contract.age") && num(spec.contract.age) !== null) { s.age = Math.round(spec.contract.age!); count++; }
-  if (take.has("contract.sex") && spec.contract.sex) { s.sex = spec.contract.sex; count++; }
-  if (take.has("contract.termYears") && num(spec.contract.termYears) !== null) { base.termYears = Math.round(spec.contract.termYears!); count++; }
-  if (take.has("contract.termAge") && num(spec.contract.termAge) !== null) { base.termYears = Math.max(1, Math.round(spec.contract.termAge!) - s.age + 1); count++; }
-  if (take.has("contract.payYears") && num(spec.contract.payYears) !== null) { base.payYears = Math.round(spec.contract.payYears!); count++; }
-  if (take.has("contract.freq") && num(spec.contract.freq) !== null) { base.freq = Math.round(spec.contract.freq!); count++; }
   if (take.has("basis.interest") && num(spec.basis.interest) !== null) { base.interest = spec.basis.interest!; count++; }
   if (take.has("basis.standardInterest") && num(spec.basis.standardInterest) !== null) { base.standardInterest = spec.basis.standardInterest!; count++; }
   if (take.has("basis.waiver") && spec.basis.waiver !== undefined) { base.waiver = spec.basis.waiver; count++; }
@@ -122,7 +116,8 @@ export function readSpecJson(text: string): MethodSpec {
 /** 위험률 유형 → 시트 열 유형. 해지율은 열이 아니라 저해지 조건(적용해지율)이다 */
 const KIND: Record<RateRole, RateKind | null> = { death: "death", incidence: "incidence", recurring: "recurring", waiver: "other", other: "other", lapse: null };
 const COVER: Record<BenefitSpec["role"], BenefitKind> = { death: "death", incidence: "incidence", recurring: "daily", other: "survival" };
-const table = (r: RateRef) => (r.table && Array.isArray(r.table.ages) && Array.isArray(r.table.values) && r.table.ages.length ? r.table : undefined);
+/** 계약정보 성별의 위험률 표 — 남·여 두 벌(tables)이면 그 성별, 한 벌(table)이면 그 표 */
+const table = (r: RateRef, sex: Sex) => { const t = rateTable(r, sex); return t && Array.isArray(t.ages) && Array.isArray(t.values) && t.ages.length ? t : undefined; };
 
 function lowOf(lapse: BasisSpec["lapse"], lowRatio: number | undefined, d: TabConditions["low"]): TabConditions["low"] {
   const l = lapse?.find((x) => x.rate > 0) ?? lapse?.[0];
@@ -159,7 +154,8 @@ function expensesOf(items: ExpenseItem[], d: Expenses): Expenses {
 /**
  * MethodSpec → "상품 만들기" 설계 전체 (planToSpec 의 반대 — 왕복하면 보험료가 같다).
  *  - 계약 단위(units, 없으면 담보의 unit 이름)마다 탭 하나. 주계약이 첫 탭
- *  - 위험률 표(RateRef.table)는 그 탭 시트의 열로. 표가 없는 위험률은 0 으로 채우고 warnings 로 알린다
+ *  - 계약정보(성별·가입나이·기간)는 spec.contract 에 있으면 그 값, 없으면(산출방법서를 읽은 조건) CONTRACT_DEFAULTS
+ *  - 위험률 표는 계약정보 성별의 표(RateRef.tables → table)를 그 탭 시트의 열로. 표가 없는 위험률은 0 으로 채우고 warnings 로 알린다
  *  - 담보의 급부·탈퇴 위험률 id 는 옮긴 열 id 로, 면책 일수는 개월로
  */
 export function planFromSpec(spec: MethodSpec): { state: PlanState; warnings: string[] } {
@@ -192,16 +188,16 @@ export function planFromSpec(spec: MethodSpec): { state: PlanState; warnings: st
   const endDefault = spec.contract.termAge ?? (base.termYears ? age + base.termYears - 1 : 80);
   const tabs: PlanTab[] = units.map((u) => {
     const rates = u.rateIds.map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r && KIND[r.role] !== null);
-    const withT = rates.filter((r) => table(r));
+    const withT = rates.filter((r) => table(r, sex));
     const ages = withT.length
-      ? [...new Set(withT.flatMap((r) => table(r)!.ages.map((a) => Math.round(a))))].sort((a, b) => a - b)
+      ? [...new Set(withT.flatMap((r) => table(r, sex)!.ages.map((a) => Math.round(a))))].sort((a, b) => a - b)
       : Array.from({ length: Math.max(1, endDefault - age + 1) }, (_, i) => age + i);
     const colOf = new Map<string, string>();
     const columns: RateColumn[] = rates.map((r) => {
-      const id = fresh("r"), t = table(r);
+      const id = fresh("r"), t = table(r, sex);
       colOf.set(r.id, id);
       if (!t) warnings.push(`위험률 "${r.name}" 에 값 표가 없어 0 으로 넣었습니다 — 시트에 붙여넣으세요`);
-      else if (t.sex && t.sex !== sex) warnings.push(`위험률 "${r.name}" 표는 ${t.sex === "M" ? "남" : "여"}자 표입니다(피보험자 ${sex === "M" ? "남" : "여"})`);
+      else if (t.sex && t.sex !== sex) warnings.push(`위험률 "${r.name}" 표는 ${t.sex === "M" ? "남" : "여"}자 표입니다(계약정보 ${sex === "M" ? "남" : "여"}) — 그 성별 표를 시트에 붙여넣으세요`);
       // 표에 없는 나이는 바로 앞 나이 값(첫 나이 앞은 첫 값) — 시트 평가(toAgeArray)와 같은 규칙
       const at = t ? new Map(t.ages.map((a, i) => [Math.round(a), Number(t.values[i]) || 0])) : null;
       let last = t ? Number(t.values[0]) || 0 : 0;

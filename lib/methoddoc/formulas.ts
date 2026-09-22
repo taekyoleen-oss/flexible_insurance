@@ -110,7 +110,7 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
     { section: "보험료의 계산", label: "급부 현가와 납입기수", path: "benefits", text:
       "PVB = Σ_{t=0}^{n−1} S_t·C_{x+t} + Σ_{t=0}^{n} C_t·D_{x+t}\n" +
       "N* = mm · [ ( N′_x − N′_{x+m} ) − ( mm−1 )/( 2·mm )·( D′_x − D′_{x+m} ) ]" },
-    { section: "보험료의 계산", label: "순보험료·기준연납순보험료", path: "contract.payYears", text:
+    { section: "보험료의 계산", label: "순보험료·기준연납순보험료", path: "benefits", text:
       "P = PVB / N*        P_base = PVB / ( N′_x − N′_{x+min(n,20)} )" },
     { section: "보험료의 계산", label: "영업보험료", path: "expenses", text: meth
       ? "G = [ P + ( α_S + α_P·P_base )·D′_x/N* + β_S/mm + β′·( N_{x+m} − N_{x+n} )/N* ] / ( 1 − β_G − γ )"

@@ -15,10 +15,6 @@ export interface LlmField { path: string; label: string; hint: string; kind: "ra
 /** 규칙으로 잘 안 잡히는 것들. 순서가 곧 우선순위 */
 export const LLM_FIELDS: LlmField[] = [
   { path: "meta.productName", label: "상품명", hint: "표지의 상품 이름. '산출방법서' 같은 문서 종류는 빼고", kind: "text" },
-  { path: "contract.age", label: "가입연령", hint: "예시 계약의 가입나이(세)", kind: "int" },
-  { path: "contract.termYears", label: "보험기간(년)", kind: "int", hint: "년 단위. '80세 만기'면 비워 두고 termAge 로" },
-  { path: "contract.termAge", label: "보험기간(세만기)", kind: "int", hint: "만기 나이(세)" },
-  { path: "contract.payYears", label: "납입기간(년)", kind: "int", hint: "보험료 납입기간" },
   { path: "basis.interest", label: "적용이율", kind: "rate", hint: "보장부분 적용이율(예정이율). 소수로 (2.5% → 0.025)" },
   { path: "basis.standardInterest", label: "표준이율", kind: "rate", hint: "표준책임준비금 기준 이율. 소수" },
   { path: "basis.lowRatio", label: "저해지 환급률", kind: "rate", hint: "납입기간 중 해지환급금 비율. 무해지면 0, 50%형이면 0.5" },

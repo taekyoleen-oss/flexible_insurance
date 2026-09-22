@@ -7,7 +7,7 @@ import { pct, won } from "@/lib/format";
 import { kindLabel, RATE_KINDS } from "@/lib/plan-rates";
 import { COLUMN_ORIGIN_LABEL, columnOrigin } from "@/lib/plan-state";
 import { colLetter } from "@/lib/sheet-formula";
-import { FREQS, PAY_YEARS, kindMeta, TAB_COND_LABEL, type BasePatch, type CoveragePatch, type PlanStepCard, type StepStatus, type TabConditions } from "@/lib/plan-state";
+import { CONTRACT_DEFAULTS, FREQS, PAY_YEARS, kindMeta, TAB_COND_LABEL, type BasePatch, type CoveragePatch, type PlanStepCard, type StepStatus, type TabConditions } from "@/lib/plan-state";
 
 const BADGE: Record<StepStatus, { label: string; cls: string }> = {
   idle: { label: "대기", cls: "bg-navy/5 text-navy/50" },
@@ -101,11 +101,17 @@ function ProductBody() {
 }
 
 function ContractBody() {
-  const { state: s, dispatch, result, cond } = usePlan();
+  const { state: s, dispatch, result, cond, main } = usePlan();
   const base = (patch: BasePatch) => dispatch({ type: "product", patch });
   const set = (patch: Partial<TabConditions>) => dispatch({ type: "conditions", patch });
+  const sum = main.coverages[0]?.amount ?? 0;
+  const D = CONTRACT_DEFAULTS;
   return (
     <>
+      <p className="mb-2 rounded bg-sky/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-navy/65">
+        보험료를 계산하는 계약 한 점입니다. 산출방법서에서 오지 않으므로 기본값({D.age}세 {D.sex === "M" ? "남" : "여"} · 보험기간 자동 · {D.payYears}년납 · 월납)으로 시작해 여기서 바꿉니다.
+        <button type="button" onClick={() => dispatch({ type: "contractDefaults" })} className="ml-1 rounded px-1 text-sky underline hover:bg-sky/10">기본값으로</button>
+      </p>
       <Inherited keys={["termYears", "payYears", "freq"]} />
       <div className="grid grid-cols-2 gap-3">
         <Field label="성별" hint="계약 단위(탭 공통)"><Select value={s.sex} onChange={(e) => base({ sex: e.target.value as "M" | "F" })}><option value="M">남</option><option value="F">여</option></Select></Field>
@@ -118,6 +124,12 @@ function ContractBody() {
           </Select>
         </Field>
         <Field label="납입주기"><Select value={cond.freq} onChange={(e) => set({ freq: Number(e.target.value) })}>{FREQS.map((f) => <option key={f.v} value={f.v}>{f.label}</option>)}</Select></Field>
+        <Field label="보험가입금액" hint="주계약 첫 담보 기준 — 바꾸면 모든 담보가 같은 비율로">
+          <div className="flex items-center gap-1">
+            <NumInput value={Math.round(sum / 1e4)} min={1} step={100} disabled={sum <= 0} onCommit={(v) => dispatch({ type: "sumAssured", value: Math.max(1, Math.round(v)) * 1e4 })} className="text-right" />
+            <span className="shrink-0 text-sm text-navy/60">만원</span>
+          </div>
+        </Field>
       </div>
     </>
   );

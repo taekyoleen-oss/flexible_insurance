@@ -100,12 +100,12 @@ describe("② 입력 조건 + 산출 결과 → 산출방법서 → 다시 읽�
     expect(md).toContain(p.effective.monthlyGross.toLocaleString("ko-KR", { maximumFractionDigits: 0 }));
   });
 
-  it("낸 문서를 다시 읽으면 이율·납입기간·사업비가 되살아난다", () => {
+  it("낸 문서를 다시 읽으면 이율·사업비가 되살아나고, 계약정보(시산 기준)는 읽지 않는다", () => {
     const s = plan("waiverSupport");
     const { back } = roundtrip(s);
     expect(back.spec.basis.interest).toBeCloseTo(s.base.interest, 12);
     expect(back.spec.basis.standardInterest).toBeCloseTo(s.base.standardInterest, 12);
-    expect(back.spec.contract.payYears).toBe(s.base.payYears);
+    expect(back.spec.contract).toEqual({});          // 계약 한 점은 산출방법서의 정보가 아니다 — 이 앱의 M02 계약정보가 정한다
     expect(back.spec.expenses.length).toBeGreaterThanOrEqual(4);
     expect(back.missing).not.toContain("사업비");
   });

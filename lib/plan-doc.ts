@@ -28,7 +28,7 @@ export function planToSpec(s: PlanState, p: ProductResult): MethodSpec {
   const base = s.base;
   spec.meta.note = s.memo || undefined;
   spec.meta.kind = base.low.on ? (base.low.ratio === 0 ? "무해지환급형" : `저해지환급형 ${Math.round(base.low.ratio * 100)}%`) : "표준형(완전 환급)";
-  spec.contract = { age: s.age, sex: s.sex, termYears: p.n, payYears: base.payYears, freq: base.freq };
+  spec.contract = { age: s.age, sex: s.sex, termYears: p.n, payYears: base.payYears, freq: base.freq, sumAssured: s.tabs[0].coverages[0]?.amount };
   spec.basis = {
     interest: base.interest, standardInterest: base.standardInterest, waiver: base.waiver,
     lapse: base.low.on ? [{ label: spec.meta.kind, rate: base.low.lapseRate, duringPayOnly: true }] : undefined,

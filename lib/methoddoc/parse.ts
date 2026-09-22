@@ -76,16 +76,7 @@ export const FIELD_RULES: FieldRule[] = [
     words: /최저\s*보증\s*이율/, value: new RegExp(`${NUM}\\s*${PCT}`) },
   { path: "basis.averagePublished", label: "평균공시이율", kind: "rate",
     words: /평균\s*공시\s*이율/, value: new RegExp(`${NUM}\\s*${PCT}`), not: /[+＋]/ },
-  { path: "contract.age", label: "가입연령", kind: "int",
-    words: /(가입\s*연령|가입\s*나이|피보험자.*연령)/, value: new RegExp(`${NUM}\\s*세`) },
-  { path: "contract.termAge", label: "보험기간(세만기)", kind: "int",
-    words: /보험\s*기간/, value: new RegExp(`${NUM}\\s*세\\s*만기`) },
-  { path: "contract.termYears", label: "보험기간(년)", kind: "int",
-    words: /보험\s*기간/, value: new RegExp(`${NUM}\\s*년\\s*만기`), not: /납입/ },
-  // 사업비 표의 "납입기간 5년이하 경우" 같은 구간 표기를 계약 납입기간으로 오인하지 않게 한다
-  { path: "contract.payYears", label: "납입기간", kind: "int",
-    words: /(납입\s*기간|보험료\s*납입)/, value: new RegExp(`${NUM}\\s*년\\s*납?`),
-    not: /(이하|이상|미만|초과|년수|경과|기간\s*중)/ },
+  // 시산 기준(가입나이·보험기간·납입기간)은 읽지 않는다 — 보험료를 계산하는 앱의 입력이다(spec.ts ContractSpec)
   { path: "benefits.waitDays", label: "면책기간", kind: "int",
     words: /(면책\s*기간|보장\s*개시|감액\s*지급)/, value: new RegExp(`${NUM}\\s*일`) },
 ];
@@ -181,7 +172,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   };
 
   // 0-0) 가입 조건 표(판매 범위: 보험기간·납입기간·가입나이 목록)를 먼저 떼어 낸다.
-  //      이 표의 "110세만기 · 만15세" 를 본문 규칙이 계약(시산 기준 한 점)으로 읽지 않게, 그 줄들은 아래 규칙에서 지운다.
+  //      이 표의 "110세만기 · 20년납" 이 본문 규칙(면책기간·해지율 등)에 섞이지 않게, 그 줄들은 아래 규칙에서 지운다.
   const productTables = readProduct(doc, spec, evidence);
   const productRows = new Set([...productTables].flatMap((ti) => [doc.tables[ti].head, ...doc.tables[ti].rows].map((r) => squeeze(r.filter(Boolean).join(" ")))));
   const paragraphs = doc.paragraphs.map((p) => (productRows.has(squeeze(p)) ? "" : p));
@@ -299,8 +290,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   }
   if (spec.rates.some((r) => r.role === "waiver")) add("basis.waiver", "납입면제", true, spec.rates.find((r) => r.role === "waiver")!.name, "위험률 목록", "medium");
 
-  // 3-0) 계약 표("항목 | 내용")와 담보 표("담보 | 단위 | 급부 유형 | …") — 이 모듈이 낸 산출방법서를 되읽을 때 조건이 온전히 돌아오게
-  readContractTable(doc, add);
+  // 3-0) 담보 표("담보 | 단위 | 급부 유형 | …") — 이 모듈이 낸 산출방법서를 되읽을 때 조건이 온전히 돌아오게
   readBenefitTable(doc, spec, evidence);
 
   // 3-1) 두 단 편집된 PDF 는 "3. 예정이율에 관한 사항" 과 값이 멀리 떨어져 규칙이 못 잇는다.
@@ -336,7 +326,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
     }
   } else spec.sections = outlineSections(doc);
 
-  const missing = ["meta.productName", "basis.interest", "contract.payYears"]
+  const missing = ["meta.productName", "basis.interest"]
     .filter((p) => !evidence.some((e) => e.path === p))
     .map((p) => FIELD_RULES.find((r) => r.path === p)?.label ?? p);
   if (!spec.expenses.length) missing.push("사업비");
@@ -487,32 +477,6 @@ function readProduct(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]):
       source: `표 ${first + 1}`, confidence: "high" });
   }
   return used;
-}
-
-/** "항목 | 내용" 계약 표: 피보험자 40세 남 · 보험기간 71년 · 납입주기 월납 · 보험가입금액 1억 */
-function readContractTable(doc: ExtractedDoc, add: Add) {
-  doc.tables.forEach((t, ti) => {
-    if (t.head.length !== 2 || !/항목/.test(t.head[0])) return;
-    for (const [k, v] of t.rows.map((r) => [squeeze(r[0] ?? ""), (r[1] ?? "").trim()])) {
-      const src = `표 ${ti + 1}`, raw = `${k} ${v}`;
-      if (/^피보험자/.test(k)) {
-        const age = /(\d+)\s*세/.exec(v);
-        if (age) add("contract.age", "가입연령", Number(age[1]), raw, src, "high");
-        if (/남/.test(v)) add("contract.sex", "성별", "M", raw, src, "high");
-        else if (/여/.test(v)) add("contract.sex", "성별", "F", raw, src, "high");
-      } else if (/^보험기간/.test(k)) {
-        const age = /(\d+)\s*세\s*만기/.exec(v), yrs = /(\d+)\s*년/.exec(v);
-        if (age) add("contract.termAge", "보험기간(세만기)", Number(age[1]), raw, src, "high");
-        else if (yrs) add("contract.termYears", "보험기간(년)", Number(yrs[1]), raw, src, "high");
-      } else if (/^(보험료)?납입주기/.test(k)) {
-        const f = /월납/.test(v) ? 12 : /연납/.test(v) ? 1 : /6\s*개월/.test(v) ? 2 : /3\s*개월/.test(v) ? 4 : /연\s*(\d+)\s*회/.test(v) ? Number(/연\s*(\d+)\s*회/.exec(v)![1]) : null;
-        if (f) add("contract.freq", "납입주기", f, raw, src, "high");
-      } else if (/^보험가입금액/.test(k)) {
-        const a = numIn(v);
-        if (a) add("contract.sumAssured", "보험가입금액", a, raw, src, "high");
-      }
-    }
-  });
 }
 
 /** "담보 | 단위 | 급부 유형 | 지급 사유 | 보장금액 | 보장 종료 | 면책 | 급부 위험률 | 탈퇴 위험률" 표 */

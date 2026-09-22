@@ -197,15 +197,15 @@ export default function MethodPage() {
       </Card>
 
       {json && (() => {
-        const s = json.spec, tables = s.rates.filter((r) => r.table?.ages?.length).length;
+        const s = json.spec, tables = s.rates.filter((r) => r.table?.ages?.length || r.tables?.M || r.tables?.F).length;
         return (
           <Card title="MethodSpec JSON → 상품 만들기 (설계 전체)">
             <p className="text-sm text-navy/80">
-              <b>{s.meta.productName || json.name}</b> · {s.contract.age ?? "—"}세 {s.contract.sex === "F" ? "여" : "남"} · 담보 {s.benefits.length}개 · 위험률 {s.rates.length}개(값 표 {tables}개)
+              <b>{s.meta.productName || json.name}</b> · 계약정보 {s.contract.age !== undefined ? `${s.contract.age}세 ${s.contract.sex === "F" ? "여" : "남"}` : "기본값"} · 담보 {s.benefits.length}개 · 위험률 {s.rates.length}개(값 표 {tables}개)
               {s.units.length > 1 && <> · 계약 단위 {s.units.length}개</>}
             </p>
             <p className="mt-1 text-xs text-navy/55">
-              Life_ins_Doc_Convert_Studio 등 다른 앱이 낸 조건입니다. 검수 없이 계약·기초율·사업비·위험률 표(시트 열)·담보를 통째로 옮겨 &quot;상품 만들기&quot; 설계를 바꿉니다.
+              Life_ins_Doc_Convert_Studio 등 다른 앱이 낸 조건입니다. 검수 없이 기초율·사업비·위험률 표(시트 열)·담보를 통째로 옮겨 &quot;상품 만들기&quot; 설계를 바꿉니다. 계약정보(성별·가입나이·기간·가입금액)는 JSON 에 없으면 기본값으로 두고 상품 만들기 M02 에서 고칩니다.
               지금 설계가 필요하면 상품 만들기의 보관함에 먼저 저장하세요.
             </p>
             {json.warnings.length > 0 && <ul className="mt-2 space-y-0.5 text-xs text-[#92400e]">{json.warnings.map((w, i) => <li key={i}>· {w}</li>)}</ul>}
@@ -325,7 +325,7 @@ export default function MethodPage() {
           <li>· <b>DRM·스캔 PDF는 못 읽습니다.</b> 해제본을 DOCX·HWPX·PDF(글자가 살아 있는 것) 로 저장해 올려 주세요. 한글의 &quot;PDF로 저장&quot;은 글자가 남습니다.</li>
           <li>· <b>자동 적용하지 않습니다.</b> 항상 검수에서 고른 것만 반영합니다. AI가 채운 값은 기본 해제 상태입니다.</li>
           <li>· 위험률 <b>표</b>는 별첨 엑셀을 시트에 직접 붙여넣는 쪽이 정확합니다. 본문에서는 계열 이름·근거 문구만 가져옵니다.</li>
-          <li>· <b>MethodSpec JSON</b>(Life_ins_Doc_Convert_Studio 에서 위험률 표를 이어 내보낸 것)은 위험률 표·담보까지 통째로 옮깁니다. 표는 피보험자 성별 한 벌입니다.</li>
+          <li>· <b>MethodSpec JSON</b>(Life_ins_Doc_Convert_Studio 에서 위험률 표를 이어 내보낸 것)은 위험률 표·담보까지 통째로 옮깁니다. 남·여 두 벌이면 계약정보 성별의 표를 씁니다.</li>
           <li>· 회사마다 표기가 달라 사전({LLM_FIELDS.length}개 항목)을 늘려 가며 적중률을 올립니다. 안 잡히는 표기를 알려 주시면 사전에 넣겠습니다.</li>
         </ul>
       </Card>

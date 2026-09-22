@@ -1,4 +1,4 @@
-import { hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type ProductInfo } from "./spec";
+import { hasContract, hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef } from "./spec";
 
 /**
  * MethodSpec → 산출방법서. 앱에 딸리지 않는다(import 는 spec 하나뿐).
@@ -6,7 +6,7 @@ import { hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type Pr
  * 목차와 문구는 참조한 원본 산출방법서(1.기초율 2.보험료 3.책임준비금 4.해지환급금 5.가입금액 변경)를 따른다.
  *
  * 블록마다 조건 경로(path)를 단다 — "basis.interest", "expenses[2]", "benefits[0]".
- * 한 블록이 여러 조건에서 나오면 "|" 로 잇는다("contract.age|contract.sex").
+ * 한 블록이 여러 조건에서 나오면 "|" 로 잇는다("basis.lapse|basis.lowRatio").
  * 편집기는 이 경로로 조건 줄 ↔ 산출방법서 블록을 서로 짝짓는다.
  */
 export type DocBlock =
@@ -36,6 +36,15 @@ export function expenseRate(e: ExpenseItem): string {
   return "—";
 }
 
+/** 위험률 표 칸 — "40~110세 71행 · 남·여" (값 표가 없으면 별첨) */
+function tableNote(r: RateRef): string {
+  const sexes = (["M", "F"] as const).filter((x) => r.tables?.[x]);
+  const t = r.tables?.M ?? r.tables?.F ?? r.table;
+  if (!t?.ages.length) return "별첨";
+  const who = sexes.length === 2 ? " · 남·여" : sexes.length === 1 ? ` · ${sexes[0] === "M" ? "남" : "여"}` : r.table?.sex ? ` · ${r.table.sex === "M" ? "남" : "여"}` : "";
+  return `${t.ages[0]}~${t.ages[t.ages.length - 1]}세 ${t.ages.length}행${who}`;
+}
+
 /** [행, 경로] 쌍으로 표를 만든다 — 행과 경로가 어긋나지 않게 */
 function table(head: string[], pairs: [(string | number)[], string | undefined][]): DocBlock {
   return { t: "table", head, rows: pairs.map((p) => p[0]), rowPaths: pairs.map((p) => p[1]) };
@@ -52,7 +61,7 @@ export interface RenderOptions {
  * 가입 조건(정보) — 사업방법서의 "보험기간 | 보험료 납입기간 | 가입나이" 표와 종류·종목·납입주기·한도·갱신.
  * 머리글을 "가입 조건 | 내용" 과 "보험기간 | …" 으로 둔다 — parse 가 이 두 표를 먼저 떼어 내 계약(시산 기준)과 섞지 않는다.
  */
-function productBlocks(p: ProductInfo): DocBlock[] {
+function productBlocks(p: ProductInfo, withContract: boolean): DocBlock[] {
   const out: DocBlock[] = [{ t: "p", text: "가입 조건", path: "product" }];
   const info = ([
     ["보험의 종류", p.category, "product.category"],
@@ -67,7 +76,9 @@ function productBlocks(p: ProductInfo): DocBlock[] {
     out.push(table([...(label ? ["구분"] : []), "보험기간", "보험료 납입기간", female ? "가입나이(남)" : "가입나이", ...(female ? ["가입나이(여)"] : [])],
       p.terms.map((r, i) => [[...(label ? [r.label ?? "—"] : []), r.term || "—", r.pay || "—", r.age || "—", ...(female ? [r.ageF || r.age || "—"] : [])], `product.terms[${i}]`])));
   }
-  out.push({ t: "note", path: "product", text: "가입 조건은 판매 범위를 적은 정보이며, 보험료·책임준비금 예시는 2. 의 시산 기준으로 계산한다." });
+  out.push({ t: "note", path: "product", text: withContract
+    ? "가입 조건은 판매 범위를 적은 정보이며, 보험료·책임준비금 예시는 2. 의 시산 기준으로 계산한다."
+    : "가입 조건은 판매 범위를 적은 정보이다. 보험료는 이 범위 안의 계약(피보험자·보험기간·납입기간)마다 계산한다." });
   return out;
 }
 
@@ -90,7 +101,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       [["계약 단위", spec.units.length ? spec.units.map((u) => u.name).join(" · ") : "주계약"], "units"],
       ...(spec.meta.note ? [[["비고", spec.meta.note], "meta.note"] as [string[], string]] : []),
     ]),
-    ...(hasProduct(spec.product) ? productBlocks(spec.product) : []),
+    ...(hasProduct(spec.product) ? productBlocks(spec.product, hasContract(spec.contract)) : []),
   ] });
 
   // 1. 기초율
@@ -111,7 +122,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       r.id,
       RATE_ROLE_LABEL[r.role],
       r.source ?? "—",
-      r.table ? `${r.table.ages[0]}~${r.table.ages[r.table.ages.length - 1]}세 ${r.table.ages.length}행` : "별첨",
+      tableNote(r),
     ], `rates[${i}]`])));
   } else {
     basisBlocks.push({ t: "p", text: "위험률이 지정되지 않았습니다.", path: "rates" });
@@ -167,14 +178,14 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     if (b.points?.length) unitBlocks.push({ t: "note", path: `benefits[${i}].points`, text: `${b.name}: 생존급부 ${b.points.map((x) => `${x.age}세 ${x.multiple}배`).join(" · ")}` });
   });
   out.push({ id: "units", title: "2. 계약 단위와 급부", blocks: [
-    { t: "p", path: "contract", text: "시산 기준 — 보험료·책임준비금 예시는 아래 계약으로 계산한다." },
-    table(["항목", "내용"], [
+    // 시산 기준은 계산하는 앱이 채웠을 때만 — 산출방법서를 읽은 조건에는 없다
+    ...(hasContract(spec.contract) ? [{ t: "p" as const, path: "contract", text: "시산 기준 — 보험료·책임준비금 예시는 아래 계약으로 계산한다." }, table(["항목", "내용"], [
       [["피보험자", `${spec.contract.age ?? "—"}세 ${spec.contract.sex === "F" ? "여" : spec.contract.sex === "M" ? "남" : ""}`], "contract.age|contract.sex"],
       [["보험기간", yearsOf(spec.contract.termYears, spec.contract.termAge)], "contract.termYears|contract.termAge"],
       [["보험료 납입기간", yearsOf(spec.contract.payYears, spec.contract.payAge)], "contract.payYears|contract.payAge"],
       [["납입주기", spec.contract.freq ? (spec.contract.freq === 12 ? "월납" : spec.contract.freq === 1 ? "연납" : `연 ${spec.contract.freq}회`) : "—"], "contract.freq"],
       ...(spec.contract.sumAssured ? [[["보험가입금액", wonOf(spec.contract.sumAssured)], "contract.sumAssured"] as [string[], string]] : []),
-    ]),
+    ])] : []),
     ...unitBlocks,
   ] });
 

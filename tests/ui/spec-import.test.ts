@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { planFromSpec, readSpecJson } from "@/lib/methoddoc-bridge";
 import { planToSpec } from "@/lib/plan-doc";
-import { evaluateProduct, PLAN_RECIPES } from "@/lib/plan-state";
+import { CONTRACT_DEFAULTS, evaluateProduct, initialPlan, planReducer, PLAN_RECIPES } from "@/lib/plan-state";
+import type { MethodSpec } from "@/lib/methoddoc/spec";
 
 /**
  * 다른 앱의 MethodSpec JSON → "상품 만들기" 설계 전체 (planFromSpec).
@@ -69,5 +70,36 @@ describe("② Life_ins_Doc_Convert_Studio 의 MethodSpec JSON", () => {
   it("MethodSpec 이 아니면 거절한다", () => {
     expect(() => readSpecJson('{"a":1}')).toThrow(/MethodSpec/);
     expect(() => readSpecJson("[1,2]")).toThrow(/MethodSpec/);
+  });
+});
+
+describe("③ 계약정보 (M02) — 산출방법서에서 오지 않는 계약 한 점", () => {
+  /** Studio 가 이제 내는 모양: 계약 없음, 위험률은 남·여 두 벌 */
+  const noContract = (): MethodSpec => {
+    const spec = studio();
+    return {
+      ...spec, contract: {},
+      rates: spec.rates.map((r) => ({ ...r, tables: { M: { ages: r.table!.ages, values: r.table!.values }, F: { ages: r.table!.ages, values: r.table!.values.map((v) => v / 2) } } })),
+    };
+  };
+  it("계약이 없으면 기본값(40세 남 · 보험기간 자동 · 20년납 · 월납)으로 연다", () => {
+    const { state, warnings } = planFromSpec(noContract());
+    expect(warnings).toEqual([]);
+    const D = CONTRACT_DEFAULTS;
+    expect([state.sex, state.age, state.base.payYears, state.base.freq]).toEqual([D.sex, D.age, D.payYears, D.freq]);
+  });
+  it("남·여 두 벌이면 계약정보 성별의 표를 시트에 넣는다", () => {
+    const spec = noContract();
+    const male = planFromSpec(spec).state.tabs[0].sheet.columns[0].cells[0];
+    const female = planFromSpec({ ...spec, contract: { sex: "F" } }).state.tabs[0].sheet.columns[0].cells[0];
+    expect(Number(female)).toBeCloseTo(Number(male) / 2, 12);
+  });
+  it("보험가입금액을 바꾸면 모든 담보가 같은 비율로, [기본값으로]는 성별·나이·기간·주기만 되돌린다", () => {
+    let s = planReducer(initialPlan(), { type: "addCoverage", kind: "death" });
+    const [a, b] = s.tabs[0].coverages.map((c) => c.amount);
+    s = planReducer(s, { type: "sumAssured", value: a * 2 });
+    expect(s.tabs[0].coverages.map((c) => c.amount)).toEqual([a * 2, b * 2]);
+    s = planReducer(planReducer(planReducer(s, { type: "product", patch: { sex: "F", age: 55 } }), { type: "conditions", patch: { payYears: 10, freq: 1 } }), { type: "contractDefaults" });
+    expect([s.sex, s.age, s.base.payYears, s.base.freq, s.tabs[0].coverages[0].amount]).toEqual(["M", 40, 20, 12, a * 2]);
   });
 });

@@ -116,8 +116,14 @@ export function cloneSheet(sheet: RateSheet): { sheet: RateSheet; idMap: Record<
   return { sheet: { ages: [...sheet.ages], columns }, idMap };
 }
 
+/**
+ * 계약정보(M02) 기본값 — 보험료를 계산하는 계약 한 점. 산출방법서에서 오지 않으므로(Studio 는 읽지 않는다)
+ * 새 설계·MethodSpec 열기 모두 이 값에서 시작해 사용자가 바꾼다. 보험기간 0 = 담보 만기로 자동
+ */
+export const CONTRACT_DEFAULTS = { sex: "M" as Sex, age: 40, termYears: 0, payYears: 20, freq: 12 };
+
 export function initialPlan(): PlanState {
-  const sex: Sex = "M", age = 40;
+  const { sex, age } = CONTRACT_DEFAULTS;
   const sheet = defaultSheet(sex, age, 80);
   const inc = sheet.columns.find((c) => c.kind === "incidence")!;
   const main: PlanTab = {
@@ -127,7 +133,7 @@ export function initialPlan(): PlanState {
   return {
     version: 3, productName: "2대질병 진단보험", memo: "", sex, age,
     base: {
-      termYears: 0, payYears: 20, freq: 12, interest: 0.025, standardInterest: 0.0325,
+      termYears: CONTRACT_DEFAULTS.termYears, payYears: CONTRACT_DEFAULTS.payYears, freq: CONTRACT_DEFAULTS.freq, interest: 0.025, standardInterest: 0.0325,
       waiver: false, low: { on: false, ratio: 0.7, lapseRate: 0.03 }, expenses: DEFAULT_EXPENSES,
     },
     tabs: [main], active: main.id, open: ["contract"], updatedAt: 0,
@@ -242,10 +248,11 @@ export function planSteps(s: PlanState, p: ProductResult): PlanStepCard[] {
       status: s.productName.trim() ? "done" : "editing",
       summary: [s.productName || "이름 없음", `${s.tabs.length}개 탭`, ...(s.memo ? [s.memo.slice(0, 20)] : [])],
       help: "상품 이름과 메모입니다. 시트 탭은 주계약 1장 + 특약 여러 장으로 두고, 특약은 주계약 조건을 기본값으로 물려받습니다." },
-    { id: "contract", code: "M02", title: "계약조건", status: "done",
+    { id: "contract", code: "M02", title: "계약정보", status: "done",
       overridden: ov("termYears") || ov("payYears") || ov("freq"),
-      summary: [`${s.age}세 ${s.sex === "M" ? "남" : "여"}`, `${r.n}년 만기 / ${r.payYears}년납`, FREQS.find((f) => f.v === c0.freq)?.label ?? ""],
-      help: "피보험자는 계약 단위라 탭이 나누지 않습니다. 보험기간·납입기간·납입주기는 탭마다 다르게 둘 수 있고, 주계약과 다르면 표시됩니다." },
+      summary: [`${s.age}세 ${s.sex === "M" ? "남" : "여"}`, `${r.n}년 만기 / ${r.payYears}년납`, FREQS.find((f) => f.v === c0.freq)?.label ?? "",
+        ...(main.coverages[0] ? [`가입금액 ${won(main.coverages[0].amount)}`] : [])],
+      help: "보험료를 계산하는 계약 한 점입니다 — 피보험자(성별·가입나이)·보험기간·납입기간·납입주기·보험가입금액. 산출방법서의 정보가 아니라서 Life_ins_Doc_Convert_Studio 는 읽지 않고, 여기서 기본값(40세 남 · 보험기간 자동 · 20년납 · 월납)으로 시작해 바꿉니다. 피보험자는 계약 단위라 탭이 나누지 않고, 보험기간·납입기간·납입주기는 탭마다 다르게 둘 수 있습니다." },
     { id: "basis", code: "M03", title: "이자율·저해지", status: c0.interest > 0 ? "done" : "error",
       overridden: ov("interest") || ov("standardInterest") || ov("low"),
       summary: [`i = ${pct(c0.interest, 2)}`, `표준 ${pct(c0.standardInterest, 2)}`, ...(c0.low.on ? [`${c0.low.ratio === 0 ? "무해지" : `저해지 ${Math.round(c0.low.ratio * 100)}%`} · 해지율 ${pct(c0.low.lapseRate)}`] : [])],
@@ -418,6 +425,9 @@ export type PlanAction =
   | { type: "ageRange"; from: number; to: number }
   | { type: "pasteTable"; ages: number[]; columns: { name: string; cells: string[] }[] }
   | { type: "load"; state: unknown }
+  // 계약정보: 보험가입금액(주계약 첫 담보 기준 — 모든 담보를 같은 비율로) · 기본값으로
+  | { type: "sumAssured"; value: number }
+  | { type: "contractDefaults" }
   | { type: "reset" };
 
 const touch = (s: PlanState, patch: Partial<PlanState>): PlanState => ({ ...s, ...patch, updatedAt: Date.now() });
@@ -438,6 +448,17 @@ export function planReducer(s: PlanState, a: PlanAction): PlanState {
         ? s.tabs.map((t) => ({ ...t, coverages: t.coverages.map((c) => ({ ...c, endAge: Math.max(c.endAge, age) })) }))
         : s.tabs;
       return touch(s, { ...a.patch, tabs });
+    }
+    case "sumAssured": {
+      const cur = main.coverages[0]?.amount ?? 0;
+      if (cur <= 0 || !(a.value > 0) || a.value === cur) return s;
+      const k = a.value / cur;
+      return touch(s, { tabs: s.tabs.map((t) => ({ ...t, coverages: t.coverages.map((c) => ({ ...c, amount: Math.round(c.amount * k) })) })) });
+    }
+    case "contractDefaults": {
+      const { sex, age, termYears, payYears, freq } = CONTRACT_DEFAULTS;
+      const next = planReducer(s, { type: "product", patch: { sex, age } });
+      return touch(next, { base: { ...next.base, termYears, payYears, freq } });
     }
     case "conditions": {
       if (tab.id === main.id) return touch(s, { base: { ...s.base, ...a.patch } });

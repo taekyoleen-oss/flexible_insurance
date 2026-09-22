@@ -33,8 +33,10 @@ export interface RateRef {
   source?: string;
   /** 계수·보정 설명 (예: "× 연령전환계수") */
   adjustment?: string;
-  /** 연령 → 값. 표가 같이 온 경우만 */
+  /** 연령 → 값. 표가 같이 온 경우만. 남·여 표가 다 있으면 tables 에 두고, 이 칸에는 한 벌(남 → 여)을 둔다(옛 소비자용) */
   table?: { ages: number[]; values: number[]; sex?: Sex };
+  /** 남·여 표. 계산하는 앱이 피보험자 성별로 고른다(rateTable) */
+  tables?: Partial<Record<Sex, { ages: number[]; values: number[] }>>;
 }
 
 /** 사업비 한 줄 — 산출방법서의 사업비 표를 그대로 담는다 */
@@ -91,6 +93,11 @@ export interface UnitSpec {
   rateIds: string[];
 }
 
+/**
+ * 시산 기준 — 보험료를 실제로 계산하는 계약 한 점(피보험자·기간·주기·가입금액).
+ * 산출방법서의 정보가 아니라 계산하는 앱의 입력이다: 산출방법서를 읽을 때는 채우지 않고(parse),
+ * 계산하는 앱(자유설계보험 상품 만들기의 "계약정보")이 채운다. 채워져 있을 때만 산출방법서에 싣는다(render).
+ */
 export interface ContractSpec {
   age?: number; sex?: Sex;
   termYears?: number; termAge?: number;
@@ -142,7 +149,7 @@ export interface EntryRow {
 
 /**
  * 가입 조건 — 산출방법서에 싣는 정보성 자료(판매 범위). 원문 표기 그대로의 글자로 둔다.
- * 보험료 산출에는 쓰지 않는다 — 산출은 contract 의 한 점(시산 기준: 가입나이·보험기간·납입기간 하나씩)으로 한다.
+ * 보험료 산출에는 쓰지 않는다 — 산출은 계산하는 앱이 정한 계약 한 점(contract: 가입나이·보험기간·납입기간 하나씩)으로 한다.
  */
 export interface ProductInfo {
   /** 보험의 종류 — "생명보험 / 종신", "장기손해보험 / 장기질병" */
@@ -157,6 +164,15 @@ export interface ProductInfo {
   sumLimit?: string;
   /** 갱신 — "비갱신형", "10년 갱신 (최대 100세)" */
   renewal?: string;
+}
+
+/** 시산 기준이 적혀 있는지 */
+export const hasContract = (c?: ContractSpec): c is ContractSpec => !!c && Object.values(c).some((v) => v !== undefined);
+
+/** 그 성별의 위험률 표 — tables 에 있으면 그것, 없으면 table(한 벌) */
+export function rateTable(r: RateRef, sex?: Sex): { ages: number[]; values: number[]; sex?: Sex } | undefined {
+  const t = sex ? r.tables?.[sex] : undefined;
+  return t ? { ...t, sex } : r.table;
 }
 
 /** 가입 조건에 적힌 것이 있는지 */
@@ -176,7 +192,7 @@ export interface MethodSpec {
   meta: { productName: string; insurer?: string; version?: string; date?: string; note?: string; kind?: string };
   /** 가입 조건(정보) — 없어도 된다. 예전 JSON 과 다른 앱은 이 칸을 모른다 */
   product?: ProductInfo;
-  /** 시산 기준 — 보험료·책임준비금을 실제로 계산하는 계약 한 점 */
+  /** 시산 기준 — 계산하는 앱이 채운다. 산출방법서를 읽은 조건에는 비어 있다 */
   contract: ContractSpec;
   basis: BasisSpec;
   rates: RateRef[];
