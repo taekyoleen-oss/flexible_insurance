@@ -35,7 +35,7 @@ function paramSheet(s: DesignState, r: EngineResult) {
   add("n", "보장기간 n", r.n, "= ω − x");
   add("S0", "기준보험금 S0 (원)", s.S0);
   add("m", "납입기간 m", s.payYears);
-  add("mm", "납입 횟수/년 mm", 12);
+  add("k", "납입주기별 계수 k (연 납입횟수)", 12);
   add("units", "단위 수 (S0 ÷ 100,000)", fc(`${ref.S0}/100000`, r.units), "10만원당 보험료에 곱한다");
   add("waiver", "납입면제 (1 = 적용)", s.waiver ? 1 : 0, "적용 시 계산기수의 f 열에 납입면제 발생률");
   add("low", "저해지 (1 = 적용)", s.lowSurrender ? 1 : 0);
@@ -52,7 +52,7 @@ function paramSheet(s: DesignState, r: EngineResult) {
     add("alphaS", "α_S 신계약비 정액", e.alphaS, "기준보험금 비례");
     add("alphaP0", "α_P 신계약비율 (원)", e.alphaP, "기준연납순보험료 비례");
     add("alphaP", "α_P 적용 = α_P × min(n,20)/20", fc(`${ref.alphaP0}*${ref.n20}/20`, (e.alphaP * Math.min(r.n, 20)) / 20));
-    add("betaS", "β_S 유지비 정액 (연)", e.betaS, "1회 납입당 β_S/mm");
+    add("betaS", "β_S 유지비 정액 (연)", e.betaS, "1회 납입당 β_S/k");
     add("betaG", "β_G 유지비율", e.betaG, "영업보험료 비례");
     add("betaPrime", "β′ 납입 후 유지비", e.betaPrime);
     add("gamma", "γ 수금비율", e.gamma);
@@ -129,20 +129,20 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
   const V = reserves(k1.k, cWait, eS, pApp), Vs = reserves(k2.k, cWait, eS, pStd);
   const stdPvb = pStd.pvb, stdBase = pStd.base, stdN = pStd.nStar, stdPBeta = pStd.pBeta;
   const pvbF = (KK: string) => `SUMPRODUCT(${SCH}!E${first}:E${lastS},${KK}!J${first}:J${lastS})+SUMPRODUCT(${SCH}!D${first}:D${lastC},${KK}!H${first}:H${lastC})`;
-  const nStarF = (KK: string) => `${ref.mm}*((${KK}!M${first}-${KK}!M${mRow})-(${ref.mm}-1)/(2*${ref.mm})*(${KK}!I${first}-${KK}!I${mRow}))`;
+  const nStarF = (KK: string) => `${ref.k}*((${KK}!M${first}-${KK}!M${mRow})-(${ref.k}-1)/(2*${ref.k})*(${KK}!I${first}-${KK}!I${mRow}))`;
   const baseF = (KK: string) => `B2/(${KK}!M${first}-${KK}!M${n20Row})`;
   const pu = r.perUnit;
   const rows: Row[] = [["항목", "Excel 수식 (검산)", "엔진 값", "설명"]];
   const put = (label: string, f: string, v: number, note = "") => rows.push([label, fc(f, v), v, note]);
   // 2~
   put("급부 현가 PVB", pvbF(K), pu.pvb, "Σ S_t(산출)·Cx + Σ C_t·Dx  (설계 스케줄 E·D열 × 계산기수 I·G열)");               // B2
-  put("월납 보정 납입기수 N*", nStarF(K), pu.nStar, "mm[(N′0 − N′m) − (mm−1)/(2mm)(D′0 − D′m)]");                    // B3
+  put("월납 보정 납입기수 N*", nStarF(K), pu.nStar, "k[(N′0 − N′m) − (k−1)/(2k)(D′0 − D′m)]");                    // B3
   put("순보험료 P (1단위·월)", "B2/B3", pu.net, "PVB / N*");                                                           // B4
   put("기준연납순보험료", baseF(K), pu.base, "PVB / (N′0 − N′min(n,20))");                                             // B5
   if (e.model === "method") {
     put("신계약비 α (1단위)", `${ref.alphaS}+${ref.alphaP}*ROUND(B5,5)`, pu.alpha, "α_S + α_P·round5(기준연납)");        // B6
     put("부가 α (1회 납입)", `(${ref.alphaS}+${ref.alphaP}*B5)*${K}!I${first}/B3`, pu.loading.alpha, "(α_S + α_P·기준연납)·D′0 / N*");   // B7
-    put("부가 β_S", `${ref.betaS}/${ref.mm}`, pu.loading.betaS, "β_S / mm");                                            // B8
+    put("부가 β_S", `${ref.betaS}/${ref.k}`, pu.loading.betaS, "β_S / k");                                            // B8
     put("부가 β′", `${ref.betaPrime}*(${K}!L${mRow}-${K}!L${nRow})/B3`, pu.loading.betaPrime, "β′(N_m − N_n) / N*");      // B9
     put("영업보험료 G (1단위·월)", `(B4+B7+B8+B9)/(1-${ref.betaG}-${ref.gamma})`, pu.gross, "(P + α + β_S + β′) / (1 − β_G − γ)");   // B10
     put("β′ 포함 연납순보험료 P_β", `(B2+${ref.betaPrime}*(${K}!L${mRow}-${K}!L${nRow}))/(${K}!M${first}-${K}!M${mRow})`, pu.pBeta, "준비금용");   // B11
@@ -180,7 +180,7 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
   put("월 순보험료 (고객 기준)", s.lowSurrender ? `${LO}!S12*${ref.units}` : `B21*${ref.units}`, eff.net);                   // B30
   put("월 영업보험료 (표준형)", `B23*${ref.units}`, r.monthly.gross);                                                       // B31
   put("월 영업보험료 (고객 납입)", `B27*${ref.units}`, eff.monthly);                                                       // B32
-  put("총 납입보험료", `B32*${ref.mm}*${ref.m}`, eff.totalPaid);                                                          // B33
+  put("총 납입보험료", `B32*${ref.k}*${ref.m}`, eff.totalPaid);                                                          // B33
   rows.push([]);                                                                                                        // 34
   rows.push(["부가보험료 분해 (1회 납입, 원)", "", "", "1단위당 부가 × S0"]);                                               // 35
   put("α", `B7*${ref.S0}`, r.loading.alpha);                                                                             // B36
@@ -218,9 +218,9 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
       fc(`${PR}!B26*${ref.units}*MAX(${k7}-A${row},0)/${k7}`, r.surrender.deduction[t]),
       fc(`ROUND(MAX(I${row}-K${row},0),0)`, r.surrender.cash[t]),
       fc(`IF(AND(${ref.low}=1,A${row}<${ref.m}),ROUND(L${row}*${ref.lowRatio},0),L${row})`, eff.cash[t]),
-      fc(`MIN(A${row},${ref.m})*${ref.mm}*${PR}!B32`, eff.paid[t]),
+      fc(`MIN(A${row},${ref.m})*${ref.k}*${PR}!B32`, eff.paid[t]),
       fc(`IF(N${row}>0,M${row}/N${row},0)`, eff.rate[t]),
-      t < n ? fc(t < m ? `${ref.mm}*(${PR}!B37+${PR}!B39+${PR}!B40)${t === 0 ? `+${PR}!B6*${ref.S0}` : ""}` : `${bpRef}*${ref.S0}`, r.expenseFlow[t]) : null,
+      t < n ? fc(t < m ? `${ref.k}*(${PR}!B37+${PR}!B39+${PR}!B40)${t === 0 ? `+${PR}!B6*${ref.S0}` : ""}` : `${bpRef}*${ref.S0}`, r.expenseFlow[t]) : null,
       // 저해지·무해지면 해지율을 넣은 준비금(저해지 시트 P열), 아니면 표준형 그대로
       fc(s.lowSurrender ? `ROUND(${LO}!P${row}*100000,0)*${ref.units}` : `I${row}`, rr[t].reserve),
       fc(s.lowSurrender ? `ROUND(${LOS}!P${row}*100000,0)*${ref.units}` : `J${row}`, rr[t].reserveStd),
@@ -260,7 +260,7 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
         ["순보험료 P", "S3/S4", pLow.net, "Ā_x / N*"],
         ["기준연납순보험료", `S3/(M${first}-M${n20Row})`, pLow.base, ""],
         ["부가 α (1회 납입)", meth ? `(${ref.alphaS}+${ref.alphaP}*S6)*I${first}/S4` : `${ref.alpha}*I${first}/S4`, pLow.loading.alpha, ""],
-        ["부가 β_S", meth ? `${ref.betaS}/${ref.mm}` : `${ref.beta}*(L${first}-L${nRow})/S4`, pLow.loading.betaS, ""],
+        ["부가 β_S", meth ? `${ref.betaS}/${ref.k}` : `${ref.beta}*(L${first}-L${nRow})/S4`, pLow.loading.betaS, ""],
         ["부가 β′", meth ? `${ref.betaPrime}*(L${mRow}-L${nRow})/S4` : "0", pLow.loading.betaPrime, ""],
         ["영업보험료 G", meth ? `(S5+S7+S8+S9)/(1-${ref.betaG}-${ref.gamma})` : `(S5+S7+S8)/(1-${ref.gamma})`, pLow.gross, ""],
         ["β′ 포함 연납순보험료 P_β", meth ? `(S3+${ref.betaPrime}*(L${mRow}-L${nRow}))/(M${first}-M${mRow})` : `S3/(M${first}-M${mRow})`, pLow.pBeta, "P열 준비금에 쓰인다"],
@@ -298,10 +298,10 @@ export function buildWorkbook(s: DesignState, r: EngineResult): XLSX.WorkBook {
       ["면책계수 (첫해)", rd.wait],
       ["위험률", rd.note],
       ["급부 현가 PVB", fc(`SUM(G12:G${12 + nr - 1})-(1-B4)*G12`, pr.pvb), "Σ_{t<n} Cx − (1 − 면책)·Cx0"],
-      ["N*", fc(`${ref.mm}*((H12-H${12 + rd.payYears})-(${ref.mm}-1)/(2*${ref.mm})*(F12-F${12 + rd.payYears}))`, pr.nStar), "납입 집단 = 급부 집단 (N′ = N, D′ = D)"],
+      ["N*", fc(`${ref.k}*((H12-H${12 + rd.payYears})-(${ref.k}-1)/(2*${ref.k})*(F12-F${12 + rd.payYears}))`, pr.nStar), "납입 집단 = 급부 집단 (N′ = N, D′ = D)"],
       ["순보험료 P", fc("B6/B7", pr.net)],
       ["영업보험료 G (1단위·월)", fc(e.model === "method"
-        ? `(B8+(${ref.alphaS}+${ref.alphaP0}*MIN(${nr},20)/20*B6/(H12-H${12 + Math.min(nr, 20)}))*F12/B7+${ref.betaS}/${ref.mm}+${ref.betaPrime}*(H${12 + rd.payYears}-H${12 + nr})/B7)/(1-${ref.betaG}-${ref.gamma})`
+        ? `(B8+(${ref.alphaS}+${ref.alphaP0}*MIN(${nr},20)/20*B6/(H12-H${12 + Math.min(nr, 20)}))*F12/B7+${ref.betaS}/${ref.k}+${ref.betaPrime}*(H${12 + rd.payYears}-H${12 + nr})/B7)/(1-${ref.betaG}-${ref.gamma})`
         : `(B8+${ref.alpha}*F12/B7+${ref.beta}*(H12-H${12 + nr})/B7)/(1-${ref.gamma})`, pr.gross), "주계약과 같은 사업비 구조 (α_P 는 n<20이면 n/20 배)"],
       ["월 보험료 (원)", fc(`ROUND(B9*100000,0)*B3/100000`, rd.monthly), "10만원당 반올림 × 단위"],
       ["t", "연령", "탈퇴율 exit", "발생률 event", "lx", "Dx", "Cx", "Nx"],

@@ -81,6 +81,7 @@ const escText = (s: string) => s
 function cellTex(c: string | number): string {
   const s = String(c).trim();
   if (/^[αβγ](_[A-Za-z0-9가-힣]+|[′']|[12])?$/.test(s)) return `$${toTex(s)}$`;
+  if (/[_^]/.test(s) && !HANGUL.test(s) && s.length < 30) return `$${toTex(s)}$`;          // 기호의 정의 — l_{x+t}
   return escText(s);
 }
 

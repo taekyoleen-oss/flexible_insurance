@@ -316,7 +316,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       const v = cover(new RegExp(`^${k}$`));
       if (v) add(path, k, v[0], `${k} ${v[0]}`, `표 ${v[1] + 1}`, "high");
     }
-    readStandard(paragraphs, spec, evidence);
+    readStandard(paragraphs, spec, evidence, format!);
     // 1.4 의 문장이 납입면제 여부다 — 위험률 목록에 납입면제 계열이 있어도 쓰지 않을 수 있다
     const w = paragraphs.find((p) => /(납입만 면제되어 더 준다|납입면제를 적용하나|별도의 납입면제율을 두지 않는다)/.test(p));
     if (w) {
@@ -340,7 +340,9 @@ type Add = (path: string, label: string, value: string | number | boolean, raw: 
 const numIn = (s: string) => { const m = /(-?[\d,]+(?:\.\d+)?)/.exec(s); return m ? n(m[1]) : null; };
 
 /** 식 비교용 — 빈칸·중괄호·표기 차이(LaTeX 를 거쳐 온 ′ − ₅ 등)를 지운다 */
+const SCRIPT_ARG = String.raw`(\{[^{}]*\}|[^\s_^{}()]+)`;
 const normFormula = (s: string) => s
+  .replace(new RegExp(String.raw`\^${SCRIPT_ARG}_${SCRIPT_ARG}`, "g"), "_$2^$1")
   .replace(/[₀-₉]/g, (c) => `_${c.charCodeAt(0) - 0x2080}`).replace(/[\s{}]/g, "")
   .replace(/'/g, "′").replace(/-/g, "−").replace(/∗/g, "*").replace(/≦/g, "≤").replace(/≧/g, "≥");
 
@@ -351,7 +353,7 @@ const normFormula = (s: string) => s
  *  - 책임준비금·해지환급금 관련 사항 절의 글  reserve.notes · surrender.notes (해약공제 기간 포함)
  *  - "※ 담보: 연령 구간 배수 40~59세 1배 · …" / "생존급부 …"  담보의 steps · points
  */
-function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence[]) {
+function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence[], format: string) {
   type Kind = "known" | "reserve" | "surrender" | "other";
   type Read = FormulaSpec & { lines: string[] };
   const TOP = /^\d+\.\s*(\S.*)$/;
@@ -367,7 +369,7 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
     if (top) {
       flush();
       title = top[1].trim();
-      kind = /^(기초율에 관한 사항|계약 단위와 급부)$/.test(title) ? "known"
+      kind = /^(기초율에 관한 사항|계약 단위와 급부|기호의 정의)$/.test(title) ? "known"
         : /^책임준비금 관련 사항$/.test(title) ? "reserve" : /^해지환급금 관련 사항$/.test(title) ? "surrender" : "other";
       extra = kind === "other" ? { title, paragraphs: [] } : null;
       if (extra) extras.push(extra);
@@ -407,7 +409,11 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   // 자동으로 만든 식(조건에서 늘 다시 만든다)과 같은 것은 빼고, 고친 식·새 식만 조건의 식으로 둔다
   const auto = generateFormulas(spec);
   const same = (a?: string, b?: string) => normFormula(a ?? "") === normFormula(b ?? "");
+  // v1 문서의 자동 식은 v2 에서 나뉘거나 기호가 바뀌었다(mm → k, 발생률 k → r) — 옛 자동 식 제목은 건너뛰고, 사람이 더한 식만 둔다
+  const v1 = /v1\s*$/.test(format);
+  const V1_AUTO = /^(유지자수·납입자수 — |(계산기수|급부 현가와 납입기수|순보험료·기준연납순보험료|영업보험료|저해지·무해지환급형|연말 책임준비금|해약공제와 해지환급금|환급률)$)/;
   spec.formulas = read.filter((f) => {
+    if (v1 && V1_AUTO.test(f.label)) return false;
     const a = auto.find((x) => x.section === f.section && x.label === f.label);
     return !a || !same(a.text, f.lines.join("\n")) || !same(a.note, f.note);
   }).map(({ lines, ...f }) => ({ ...f, text: lines.join("\n") }));
@@ -485,37 +491,51 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
     const s = name.trim();
     return spec.rates.find((r) => r.name === s) ?? spec.rates.find((r) => s && (r.name.endsWith(` · ${s}`) || s.endsWith(r.name)));
   };
+  const multi = doc.tables.some((x) => squeeze(x.head.join("")).includes("주계약과다른조건"));
+  const KEYS = ["담보", "단위", "급부유형", "지급사유", "보장금액", "보장종료", "면책", "급부위험률", "탈퇴위험률"] as const;
+  type Rec = Partial<Record<(typeof KEYS)[number], string>>;
+  const add = (f: Rec, raw: string, ti: number) => {
+    const get = (k: keyof Rec) => (f[k] ?? "").trim();
+    const name = get("담보");
+    if (!name) return;
+    const roleRaw = ROLE_BY_LABEL.get(get("급부유형"));
+    const role = roleRaw && roleRaw !== "waiver" && roleRaw !== "lapse" ? roleRaw : "incidence";
+    const ev = get("급부위험률"), exits = get("탈퇴위험률");
+    const bs: BenefitSpec = {
+      id: `b${spec.benefits.length + 1}`, name, role,
+      ...(get("단위") && !(get("단위") === "주계약" && !multi) ? { unit: get("단위") } : {}),
+      ...(get("지급사유") && get("지급사유") !== "—" ? { trigger: get("지급사유") } : {}),
+    };
+    const amt = numIn(get("보장금액"));
+    if (amt !== null) bs.amount = amt;
+    const end = /(\d+)\s*세/.exec(get("보장종료"));
+    if (end) bs.endAge = Number(end[1]);
+    const wait = /(\d+)\s*일/.exec(get("면책"));
+    if (wait) bs.waitDays = Number(wait[1]);
+    if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) bs.rateId = byName(ev)?.id;
+    const ids = exits.split(/\s+및\s+|\s*\+\s*|,\s*/).map((x) => byName(x)?.id).filter((x): x is string => !!x);
+    if (ids.length) bs.exitRateIds = ids;
+    spec.benefits.push(bs);
+    evidence.push({ path: `benefits[${spec.benefits.length - 1}]`, label: "담보", value: name, raw: raw.slice(0, 160), source: `표 ${ti + 1}`, confidence: "high" });
+  };
+  const key = (c: string) => squeeze(c).replace(/\s/g, "");
   doc.tables.forEach((t, ti) => {
-    const h = t.head.map((c) => squeeze(c));
-    const col = (re: RegExp) => h.findIndex((c) => re.test(c));
-    const cName = col(/^담보$/), cRole = col(/^급부유형$/), cAmt = col(/^보장금액$/);
-    if (cName < 0 || cRole < 0 || cAmt < 0) return;
-    const multi = doc.tables.some((x) => squeeze(x.head.join("")).includes("주계약과다른조건"));
-    const cUnit = col(/^단위$/), cTrig = col(/^지급사유$/), cEnd = col(/^보장종료$/), cWait = col(/^면책$/), cEv = col(/^급부위험률$/), cExit = col(/^탈퇴위험률$/);
-    t.rows.forEach((r) => {
-      const get = (c: number) => (c >= 0 ? (r[c] ?? "").trim() : "");
-      const name = get(cName);
-      if (!name) return;
-      const roleRaw = ROLE_BY_LABEL.get(get(cRole));
-      const role = roleRaw && roleRaw !== "waiver" && roleRaw !== "lapse" ? roleRaw : "incidence";
-      const ev = get(cEv), exits = get(cExit);
-      const b: BenefitSpec = {
-        id: `b${spec.benefits.length + 1}`, name, role,
-        ...(get(cUnit) && !(get(cUnit) === "주계약" && !multi) ? { unit: get(cUnit) } : {}),
-        ...(get(cTrig) && get(cTrig) !== "—" ? { trigger: get(cTrig) } : {}),
-      };
-      const amt = numIn(get(cAmt));
-      if (amt !== null) b.amount = amt;
-      const end = /(\d+)\s*세/.exec(get(cEnd));
-      if (end) b.endAge = Number(end[1]);
-      const wait = /(\d+)\s*일/.exec(get(cWait));
-      if (wait) b.waitDays = Number(wait[1]);
-      if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) b.rateId = byName(ev)?.id;
-      const ids = exits.split(/\s+및\s+|\s*\+\s*|,\s*/).map((x) => byName(x)?.id).filter((x): x is string => !!x);
-      if (ids.length) b.exitRateIds = ids;
-      spec.benefits.push(b);
-      evidence.push({ path: `benefits[${spec.benefits.length - 1}]`, label: "담보", value: name, raw: r.filter(Boolean).join(" | ").slice(0, 160), source: `표 ${ti + 1}`, confidence: "high" });
-    });
+    const h = t.head.map(key);
+    // 세로: "담보 | 사망·80% 이상 장해" 다음 행마다 "급부 유형 | 사망" … (표준 산출방법서 v2)
+    if (h.length === 2 && h[0] === "담보" && t.rows.some((r) => key(r[0] ?? "") === "급부유형")) {
+      const f: Rec = { 담보: t.head[1] };
+      for (const r of t.rows) { const k = key(r[0] ?? "") as keyof Rec; if ((KEYS as readonly string[]).includes(k)) f[k] = r[1] ?? ""; }
+      add(f, [t.head, ...t.rows].map((r) => r.join(" ")).join(" | "), ti);
+      return;
+    }
+    // 가로: "담보 | 단위 | 급부 유형 | … " 한 행이 담보 하나 (v1 · 다른 앱)
+    const col = (k: string) => h.indexOf(k);
+    if (col("담보") < 0 || col("급부유형") < 0 || col("보장금액") < 0) return;
+    for (const r of t.rows) {
+      const f: Rec = {};
+      for (const k of KEYS) if (col(k) >= 0) f[k] = r[col(k)] ?? "";
+      add(f, r.filter(Boolean).join(" | "), ti);
+    }
   });
 }
 

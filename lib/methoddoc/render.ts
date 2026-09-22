@@ -24,9 +24,10 @@ const yearsOf = (y?: number, a?: number) => (y ? `${y}년` : a ? `${a}세 만기
 /**
  * 표준 산출방법서 — 이 모듈이 내는 산출방법서의 모양 자체다. 개요 표의 "양식" 행이 표시이고,
  * parse 는 이 표시를 보면 수식·주석·절까지 정해진 순서대로 되읽는다(parseStandard).
- * 모양을 바꾸면 판(v2 …)을 올리고 parse 가 옛 판도 읽게 둔다.
+ * 모양을 바꾸면 판을 올리고 parse 가 옛 판도 읽게 둔다.
+ *  v2 (2026-09-22): 기호의 정의 절 · 담보마다 세로 표 · 식은 한 줄에 하나(설명은 위) · 납입주기 k · 현가율 값 행 없음
  */
-export const STANDARD_FORMAT = "표준 산출방법서 v1";
+export const STANDARD_FORMAT = "표준 산출방법서 v2";
 
 /** 사업비 한 줄의 비율 표기 — 원문이 있으면 원문을, 없으면 정규화 값을 쓴다 */
 export function expenseRate(e: ExpenseItem): string {
@@ -82,6 +83,28 @@ function productBlocks(p: ProductInfo, withContract: boolean): DocBlock[] {
   return out;
 }
 
+/**
+ * 기호의 정의 — 기간·주기·기초율 기호. 위험률 기호(q · r · f)는 담보별 식의 첫 줄들에서 정의한다.
+ * 값은 싣지 않는다(1. 기초율 표가 값이다) — 되읽을 때 같은 값이 두 번 잡히지 않게.
+ */
+function symbolBlocks(spec: MethodSpec): DocBlock[] {
+  const lapse = (spec.basis.lapse ?? []).some((l) => l.rate > 0);
+  const rows: [string, string][] = [
+    ["x", "피보험자의 가입나이"],
+    ["t", "경과기간(년), 0 ≤ t < n"],
+    ["n", "보험기간(년)"],
+    ["m", "보험료 납입기간(년)"],
+    ["k", "납입주기별 계수 — 연 납입횟수 (연납 1, 6개월납 2, 3개월납 4, 월납 12)"],
+    ["i", "적용이율 (1.1.)"],
+    ["v", "현가율 = 1/(1+i)"],
+    ["l_{x+t}", "t시점 유지자수 (기준 인원 l_x = 100,000)"],
+    ["l′_{x+t}", "t시점 납입자수"],
+    ...(lapse ? [["w_{x+t}", "적용해지율 (1.3.)"] as [string, string]] : []),
+    ...(lapse && spec.basis.lowRatio !== undefined ? [["ρ", "납입기간 중 해지환급금 비율 (1.3. — 무해지 0)"] as [string, string]] : []),
+  ];
+  return [table(["기호", "뜻"], rows.map((r) => [r, undefined]))];
+}
+
 /** 산출방법서 본문 */
 export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocSection[] {
   // 작성일은 조건에 적힌 것만 싣는다. today 를 넘기면(인쇄용) 비어 있을 때 그 날짜를 쓴다 — 되읽을 때 조건이 아닌 날짜가 섞이지 않게
@@ -112,7 +135,6 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       [["표준이율", pctOf(spec.basis.standardInterest)], "basis.standardInterest"],
       ...(spec.basis.minGuaranteed !== undefined ? [[["최저보증이율", pctOf(spec.basis.minGuaranteed)], "basis.minGuaranteed"] as [string[], string]] : []),
       ...(spec.basis.averagePublished !== undefined ? [[["평균공시이율", pctOf(spec.basis.averagePublished)], "basis.averagePublished"] as [string[], string]] : []),
-      ...(spec.basis.interest !== undefined ? [[["현가율 v = 1/(1+i)", (1 / (1 + spec.basis.interest)).toFixed(6)], "basis.interest"] as [string[], string]] : []),
     ]),
     { t: "p", text: "1.2. 위험률에 관한 사항", path: "rates" },
   ];
@@ -145,7 +167,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   } else {
     basisBlocks.push({ t: "p", path: "basis.waiver", text: spec.basis.waiver
       ? "납입면제를 적용하나 위험률이 지정되지 않았습니다."
-      : "별도의 납입면제율을 두지 않는다. 납입자수 l′ 는 각 담보의 탈퇴 사유로 유지자수 l 과 똑같이 줄어든다(3. 계산기수의 담보별 식)." });
+      : "별도의 납입면제율을 두지 않는다. 납입자수 l′ 는 각 담보의 탈퇴 사유로 유지자수 l 과 똑같이 줄어든다(계산기수 절의 담보별 식)." });
   }
   basisBlocks.push({ t: "p", text: "1.5. 시산보험료 계산 시 적용하는 사업비에 관한 사항", path: "expenses" });
   basisBlocks.push(spec.expenses.length
@@ -164,15 +186,18 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       Object.keys(u.overrides ?? {}).length ? Object.keys(u.overrides ?? {}).join(", ") : "— (모두 상속)",
     ], `units[${i}]`])));
   }
-  unitBlocks.push(table(["담보", "단위", "급부 유형", "지급 사유", "보장금액", "보장 종료", "면책", "급부 위험률", "탈퇴 위험률"],
-    spec.benefits.map((b, i) => [[
-      b.name, b.unit ?? "주계약", RATE_ROLE_LABEL[b.role], b.trigger ?? "—",
-      wonOf(b.amount) + (b.role === "recurring" ? "/일" : ""),
-      b.endAge ? `${b.endAge}세` : "—",
-      b.waitDays ? `${b.waitDays}일` : "없음",
-      b.role === "death" && !b.rateId ? "탈퇴 사유 전부" : rateName(b.rateId),
-      (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—",
-    ], `benefits[${i}]`])));
+  spec.benefits.forEach((b, i) => {
+    unitBlocks.push(table(["담보", b.name], ([
+      ["단위", b.unit ?? "주계약"],
+      ["급부 유형", RATE_ROLE_LABEL[b.role]],
+      ["지급 사유", b.trigger ?? "—"],
+      ["보장금액", wonOf(b.amount) + (b.role === "recurring" ? "/일" : "")],
+      ["보장 종료", b.endAge ? `${b.endAge}세` : "—"],
+      ["면책", b.waitDays ? `${b.waitDays}일` : "없음"],
+      ["급부 위험률", b.role === "death" && !b.rateId ? "탈퇴 사유 전부" : rateName(b.rateId)],
+      ["탈퇴 위험률", (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—"],
+    ] as [string, string][]).map((row) => [row, `benefits[${i}]`])));
+  });
   spec.benefits.forEach((b, i) => {
     if (b.steps?.length) unitBlocks.push({ t: "note", path: `benefits[${i}].steps`, text: `${b.name}: 연령 구간 배수 ${b.steps.map((x) => `${x.fromAge}~${x.toAge}세 ${x.multiple}배`).join(" · ")}` });
     if (b.points?.length) unitBlocks.push({ t: "note", path: `benefits[${i}].points`, text: `${b.name}: 생존급부 ${b.points.map((x) => `${x.age}세 ${x.multiple}배`).join(" · ")}` });
@@ -197,6 +222,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     bySection.set(f.section, list);
   }
   let no = 3;
+  if (spec.formulas.length) out.push({ id: "symbols", title: `${no++}. 기호의 정의`, blocks: symbolBlocks(spec) });
   for (const [section, list] of bySection) {
     const blocks: DocBlock[] = [];
     for (const f of list) {
