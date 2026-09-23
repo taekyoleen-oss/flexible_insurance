@@ -1,4 +1,4 @@
-import { hasContract, hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef } from "./spec";
+import { hasContract, hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
  * MethodSpec → 산출방법서. 앱에 딸리지 않는다(import 는 spec 하나뿐).
@@ -26,6 +26,7 @@ const yearsOf = (y?: number, a?: number) => (y ? `${y}년` : a ? `${a}세 만기
  * parse 는 이 표시를 보면 수식·주석·절까지 정해진 순서대로 되읽는다(parseStandard).
  * 모양을 바꾸면 판을 올리고 parse 가 옛 판도 읽게 둔다.
  *  v2 (2026-09-22): 기호의 정의 절 · 담보마다 세로 표 · 식은 한 줄에 하나(설명은 위) · 납입주기 k · 현가율 값 행 없음
+ *     (2026-09-24) 값 표가 있는 위험률은 맨 뒤 "별첨 — 위험률 표"(연령 × 열) — 판은 그대로(없던 절이 늘었을 뿐, 옛 파서도 넘긴다)
  */
 export const STANDARD_FORMAT = "표준 산출방법서 v2";
 
@@ -44,6 +45,30 @@ function tableNote(r: RateRef): string {
   if (!t?.ages.length) return "별첨";
   const who = sexes.length === 2 ? " · 남·여" : sexes.length === 1 ? ` · ${sexes[0] === "M" ? "남" : "여"}` : r.table?.sex ? ` · ${r.table.sex === "M" ? "남" : "여"}` : "";
   return `${t.ages[0]}~${t.ages[t.ages.length - 1]}세 ${t.ages.length}행${who}`;
+}
+
+/**
+ * 값 표가 실린 위험률을 연령 × 열로 편 것 — 별첨 위험률 표(render)와 위험률 표 창(앱의 sheetFromSpec)이 같은 모양을 쓴다.
+ * 남·여 두 벌(tables)이면 열 둘, 한 벌(table)이면 열 하나. 표가 하나도 없으면 null
+ */
+export function rateGrid(spec: MethodSpec): { ages: number[]; cols: { i: number; r: RateRef; sex?: Sex; head: string; t: { ages: number[]; values: number[] } }[] } | null {
+  const sexName = (s?: Sex) => (s === "M" ? "(남)" : s === "F" ? "(여)" : "");
+  const cols = spec.rates.flatMap((r, i) => {
+    const both = (["M", "F"] as const).flatMap((x) => (r.tables?.[x]?.ages?.length ? [{ i, r, sex: x as Sex | undefined, head: r.name + sexName(x), t: r.tables[x]! }] : []));
+    return both.length ? both : r.table?.ages?.length ? [{ i, r, sex: r.table.sex, head: r.name + sexName(r.table.sex), t: r.table }] : [];
+  });
+  if (!cols.length) return null;
+  return { ages: [...new Set(cols.flatMap((c) => c.t.ages))].sort((a, b) => a - b), cols };
+}
+
+/** 별첨 — 위험률 표. 되읽으면(앱의 sheetFromDoc) 위험률 표 창으로 돌아가 값이 문서를 거쳐도 남는다 */
+function rateTableBlocks(spec: MethodSpec): DocBlock[] {
+  const g = rateGrid(spec);
+  if (!g) return [];
+  return [
+    { t: "p", path: "rates", text: "1.2. 의 위험률 가운데 값 표가 실린 것. 연령은 피보험자 나이(x+t), 값은 연 발생률이다." },
+    table(["연령", ...g.cols.map((c) => c.head)], g.ages.map((a) => [[a, ...g.cols.map((c) => { const k = c.t.ages.indexOf(a); return k < 0 ? "—" : c.t.values[k]; })], "rates"])),
+  ];
 }
 
 /** [행, 경로] 쌍으로 표를 만든다 — 행과 경로가 어긋나지 않게 */
@@ -250,6 +275,8 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   });
 
   for (const s of opt.extra ?? []) out.push({ ...s, title: s.title.replace(/^\d+\.\s*/, `${no++}. `) });
+  const appendix = rateTableBlocks(spec);
+  if (appendix.length) out.push({ id: "rate-tables", title: `${no++}. 별첨 — 위험률 표`, blocks: appendix });
   return out;
 }
 

@@ -174,6 +174,8 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   // 0-0) 가입 조건 표(판매 범위: 보험기간·납입기간·가입나이 목록)를 먼저 떼어 낸다.
   //      이 표의 "110세만기 · 20년납" 이 본문 규칙(면책기간·해지율 등)에 섞이지 않게, 그 줄들은 아래 규칙에서 지운다.
   const productTables = readProduct(doc, spec, evidence);
+  // 위험률 값 표(별첨 — 첫 열이 연령, 나머지가 수)는 조건이 아니라 값이다(앱이 위험률 표 창으로 가져간다). 열 이름이 위험률 이름으로 주워지지 않게 뺀다
+  doc.tables.forEach((t, ti) => { if (isRateValueTable(t)) productTables.add(ti); });
   const productRows = new Set([...productTables].flatMap((ti) => [doc.tables[ti].head, ...doc.tables[ti].rows].map((r) => squeeze(r.filter(Boolean).join(" ")))));
   const paragraphs = doc.paragraphs.map((p) => (productRows.has(squeeze(p)) ? "" : p));
 
@@ -240,6 +242,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   }
   // 위험률을 통째로 표로 싣는 문서("위험률 | 유형 | 근거·출처 | 표"). 이 앱이 낸 산출방법서가 이 모양이라 왕복이 이어진다
   for (const [ti, t] of doc.tables.entries()) {
+    if (productTables.has(ti)) continue;
     const head = t.head.map((c) => squeeze(c).trim());
     if (!/^위험[률율]$/.test(head[0] ?? "")) continue;
     const roleCol = head.findIndex((c) => /^유형$/.test(c));
@@ -270,7 +273,8 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   }
 
   // 표에 적힌 위험률 근거도 줍는다
-  for (const t of doc.tables) {
+  for (const [ti, t] of doc.tables.entries()) {
+    if (productTables.has(ti)) continue;
     for (const row of t.rows) {
       const cell = row.find((c) => /위험률/.test(c));
       const body = row[row.length - 1];
@@ -291,7 +295,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   if (spec.rates.some((r) => r.role === "waiver")) add("basis.waiver", "납입면제", true, spec.rates.find((r) => r.role === "waiver")!.name, "위험률 목록", "medium");
 
   // 3-0) 담보 표("담보 | 단위 | 급부 유형 | …") — 이 모듈이 낸 산출방법서를 되읽을 때 조건이 온전히 돌아오게
-  readBenefitTable(doc, spec, evidence);
+  readBenefitTable(doc, spec, evidence, warnings);
 
   // 3-1) 두 단 편집된 PDF 는 "3. 예정이율에 관한 사항" 과 값이 멀리 떨어져 규칙이 못 잇는다.
   //      끝내 못 찾았을 때만 "연 N% 복리" 를 낮은 확신도로 제안한다(기본 미적용, 사람이 확인).
@@ -341,7 +345,7 @@ const numIn = (s: string) => { const m = /(-?[\d,]+(?:\.\d+)?)/.exec(s); return 
 
 /** 식 비교용 — 빈칸·중괄호·표기 차이(LaTeX 를 거쳐 온 ′ − ₅ 등)를 지운다 */
 const SCRIPT_ARG = String.raw`(\{[^{}]*\}|[^\s_^{}()]+)`;
-const normFormula = (s: string) => s
+export const normFormula = (s: string) => s
   .replace(new RegExp(String.raw`\^${SCRIPT_ARG}_${SCRIPT_ARG}`, "g"), "_$2^$1")
   .replace(/[₀-₉]/g, (c) => `_${c.charCodeAt(0) - 0x2080}`).replace(/[\s{}]/g, "")
   .replace(/'/g, "′").replace(/-/g, "−").replace(/∗/g, "*").replace(/≦/g, "≤").replace(/≧/g, "≥");
@@ -369,7 +373,7 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
     if (top) {
       flush();
       title = top[1].trim();
-      kind = /^(기초율에 관한 사항|계약 단위와 급부|기호의 정의)$/.test(title) ? "known"
+      kind = /^(기초율에 관한 사항|계약 단위와 급부|기호의 정의)$|^별첨/.test(title) ? "known"
         : /^책임준비금 관련 사항$/.test(title) ? "reserve" : /^해지환급금 관련 사항$/.test(title) ? "surrender" : "other";
       extra = kind === "other" ? { title, paragraphs: [] } : null;
       if (extra) extras.push(extra);
@@ -486,10 +490,17 @@ function readProduct(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]):
 }
 
 /** "담보 | 단위 | 급부 유형 | 지급 사유 | 보장금액 | 보장 종료 | 면책 | 급부 위험률 | 탈퇴 위험률" 표 */
-function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]) {
-  const byName = (name: string) => {
+function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warnings: string[]) {
+  const byName = (name: string, ben: string) => {
     const s = name.trim();
-    return spec.rates.find((r) => r.name === s) ?? spec.rates.find((r) => s && (r.name.endsWith(` · ${s}`) || s.endsWith(r.name)));
+    const hit = spec.rates.find((r) => r.name === s) ?? spec.rates.find((r) => s && (r.name.endsWith(` · ${s}`) || s.endsWith(r.name)));
+    if (hit || !s || s === "—") return hit;
+    // 담보 표에만 적은 위험률 — 1.2. 위험률 표에 없어도 계열로 더한다(유형은 이름으로 어림). 사람이 유형·근거를 채운다
+    const ref: RateRef = { id: `r${spec.rates.length + 1}`, name: s, role: roleOf(s) === "lapse" ? "other" : roleOf(s) };
+    spec.rates.push(ref);
+    evidence.push({ path: `rates[${spec.rates.length - 1}]`, label: "위험률", value: s, raw: `담보 "${ben}"`, source: "담보 표", confidence: "medium" });
+    warnings.push(`담보 "${ben}" 의 위험률 "${s}" 이(가) 1.2. 위험률 표에 없어 "${RATE_ROLE_LABEL[ref.role]}" 유형으로 더했습니다 — 유형·근거를 확인하세요`);
+    return ref;
   };
   const multi = doc.tables.some((x) => squeeze(x.head.join("")).includes("주계약과다른조건"));
   const KEYS = ["담보", "단위", "급부유형", "지급사유", "보장금액", "보장종료", "면책", "급부위험률", "탈퇴위험률"] as const;
@@ -512,8 +523,8 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
     if (end) bs.endAge = Number(end[1]);
     const wait = /(\d+)\s*일/.exec(get("면책"));
     if (wait) bs.waitDays = Number(wait[1]);
-    if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) bs.rateId = byName(ev)?.id;
-    const ids = exits.split(/\s+및\s+|\s*\+\s*|,\s*/).map((x) => byName(x)?.id).filter((x): x is string => !!x);
+    if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) bs.rateId = byName(ev, name)?.id;
+    const ids = exits.split(/\s+및\s+|\s*\+\s*|,\s*/).map((x) => byName(x, name)?.id).filter((x): x is string => !!x);
     if (ids.length) bs.exitRateIds = ids;
     spec.benefits.push(bs);
     evidence.push({ path: `benefits[${spec.benefits.length - 1}]`, label: "담보", value: name, raw: raw.slice(0, 160), source: `표 ${ti + 1}`, confidence: "high" });
@@ -670,6 +681,14 @@ function readLapse(line: string, li: number, spec: MethodSpec, add: Add, source?
   } else if (LAPSE_NONE.test(line) && LAPSE_WORDS.test(line)) {
     add("basis.lapse", "적용해지율", "적용하지 않음", line.slice(0, 160), src, conf, false);
   }
+}
+
+/** 위험률 값 표 — 첫 열이 연령(정수)이고 나머지 칸에 수가 있는 표(별첨). 앱이 위험률 표 창으로 가져가고, 조건 규칙은 보지 않는다 */
+export function isRateValueTable(t: DocTable): boolean {
+  const head = squeeze(t.head[0] ?? "").replace(/\s/g, "");
+  if (t.head.length < 2 || t.rows.length < 2 || !/^(연령|나이|가입나이|age|x)$/i.test(head) && !/연령|나이/.test(head)) return false;
+  const int = (s: string) => /^\d{1,3}\s*세?$/.test(s.trim());
+  return t.rows.every((r) => int(r[0] ?? "")) && t.rows.some((r) => r.slice(1).some((c) => /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*[%‰]?$/.test(c.replace(/,/g, "").trim())));
 }
 
 /** 번호 붙은 제목 줄인지 — "1.", "1.1.", "가.", "(1)", "○", "◦" */
