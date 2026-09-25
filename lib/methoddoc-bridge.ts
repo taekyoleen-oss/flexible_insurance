@@ -2,7 +2,7 @@ import {
   autoExitCols, initialPlan, PLAN_STORAGE_KEY, sanitizePlan, evaluateProduct, suggestEventCol,
   type PlanCoverageState, type PlanState, type PlanTab, type TabConditions,
 } from "./plan-state";
-import type { RateColumn, RateKind, RateSheet } from "./plan-rates";
+import { newColId, type RateColumn, type RateKind, type RateSheet } from "./plan-rates";
 import type { BenefitKind, Expenses, ExpensesMethod } from "./engine";
 import { planToSpec } from "./plan-doc";
 import { emptySpec, rateTable, type BenefitSpec, type BasisSpec, type ContractSpec, type Evidence, type ExpenseItem, type MethodSpec, type RateRef, type RateRole, type Sex } from "./methoddoc/spec";
@@ -91,9 +91,34 @@ export function applySpecToPlan(spec: MethodSpec, accepted: Evidence[]): number 
     if (e) { base.expenses = e; count++; }
   }
 
+  // 위험률 — 고른 계열 가운데 지금 탭 시트에 같은 이름의 열이 없는 것은 열로 더한다(값 표가 있으면 계약정보 성별의 값, 없으면 0 — 시트에 붙여넣는다).
+  // 있는 열은 건드리지 않는다(시트에 붙여넣은 값이 더 정확하다)
+  // 이름 비교는 느슨하게 — "제7회 경험생명표 사망률 q"(이 앱의 프리셋) 와 "제7회 경험생명표 사망률"(산출방법서) 는 같은 계열
+  const key = (n: string) => n.replace(/\s+[A-Za-z]\d?$/, "").replace(/[\s()·_-]/g, "").toLowerCase();
+  const same = (a: string, b: string) => { const x = key(a), y = key(b); return x === y || (x.length >= 2 && y.length >= 2 && (x.includes(y) || y.includes(x))); };
+  const tabs = s.tabs.map((t) => {
+    if (t.id !== s.active) return t;
+    const added = spec.rates.flatMap((r, i) => {
+      if (!take.has(`rates[${i}]`) || KIND[r.role] === null || t.sheet.columns.some((c) => same(c.name, r.name))) return [];
+      return [rateColumn(r, s.sex, t.sheet.ages)];
+    });
+    if (!added.length) return t;
+    count += added.length;
+    return { ...t, sheet: { ...t.sheet, columns: [...t.sheet.columns, ...added].slice(0, 20) } };
+  });
+
   if (!count) return 0;
-  writePlan({ ...s, base, memo: [s.memo, `산출방법서에서 ${count}개 항목 적용`].filter(Boolean).join(" · ").slice(0, 200) });
+  writePlan({ ...s, base, tabs, memo: [s.memo, `산출방법서에서 ${count}개 항목 적용`].filter(Boolean).join(" · ").slice(0, 200) });
   return count;
+}
+
+/** 위험률 계열 → 시트 열. 표에 없는 나이는 바로 앞 나이 값(첫 나이 앞은 첫 값) — 시트 평가(toAgeArray)와 같은 규칙 */
+function rateColumn(r: RateRef, sex: Sex, ages: number[]): RateColumn {
+  const t = table(r, sex);
+  const at = t ? new Map(t.ages.map((a, i) => [Math.round(a), Number(t.values[i]) || 0])) : null;
+  let last = t ? Number(t.values[0]) || 0 : 0;
+  const cells = ages.map((a) => { if (at?.has(a)) last = at.get(a)!; return String(last); });
+  return { id: newColId(), name: r.name, kind: KIND[r.role]!, waiver: r.role === "waiver", cells, ...(r.source ? { source: r.source } : {}) };
 }
 
 // ── MethodSpec JSON → 설계 전체 ──────────────────────────────────────────────
@@ -194,15 +219,12 @@ export function planFromSpec(spec: MethodSpec): { state: PlanState; warnings: st
       : Array.from({ length: Math.max(1, endDefault - age + 1) }, (_, i) => age + i);
     const colOf = new Map<string, string>();
     const columns: RateColumn[] = rates.map((r) => {
-      const id = fresh("r"), t = table(r, sex);
-      colOf.set(r.id, id);
+      const t = table(r, sex);
       if (!t) warnings.push(`위험률 "${r.name}" 에 값 표가 없어 0 으로 넣었습니다 — 시트에 붙여넣으세요`);
       else if (t.sex && t.sex !== sex) warnings.push(`위험률 "${r.name}" 표는 ${t.sex === "M" ? "남" : "여"}자 표입니다(계약정보 ${sex === "M" ? "남" : "여"}) — 그 성별 표를 시트에 붙여넣으세요`);
-      // 표에 없는 나이는 바로 앞 나이 값(첫 나이 앞은 첫 값) — 시트 평가(toAgeArray)와 같은 규칙
-      const at = t ? new Map(t.ages.map((a, i) => [Math.round(a), Number(t.values[i]) || 0])) : null;
-      let last = t ? Number(t.values[0]) || 0 : 0;
-      const cells = ages.map((a) => { if (at?.has(a)) last = at.get(a)!; return String(last); });
-      return { id, name: r.name, kind: KIND[r.role]!, waiver: r.role === "waiver", cells, ...(r.source ? { source: r.source } : {}) };
+      const col = { ...rateColumn(r, sex, ages), id: fresh("r") };
+      colOf.set(r.id, col.id);
+      return col;
     });
     if (rates.length > 20) warnings.push(`${u.name}: 위험률이 ${rates.length}개라 앞의 20개만 시트에 넣었습니다`);
     const sheet: RateSheet = { ages, columns };
