@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { planFromSpec, readSpecJson } from "@/lib/methoddoc-bridge";
+import { computeSpec } from "@/lib/methoddoc/calc";
 import { activeTab, evaluateProduct } from "@/lib/plan-state";
 
 /**
@@ -42,6 +43,22 @@ describe.runIf(existsSync(SPEC))("Studio 기본 상품 → 이 앱의 계산", (
     const both = (a: number, b: number) => a + b - (a * b) / 2;
     const keepMain = 1 - both(q, r80) - rc + (both(q, r80) * rc) / 2, keepCancer = 1 - both(q, rc) - r80 + (both(q, rc) * r80) / 2;
     expect(keepMain).toBeCloseTo(keepCancer, 8);
+  });
+
+  it("산출방법서의 식을 그대로 읽어 계산해도 엔진과 같은 값 — 다른 앱은 lib/methoddoc 만으로도 산출할 수 있다", () => {
+    const spec = readSpecJson(readFileSync(SPEC, "utf8"));
+    const got = computeSpec(spec, { sex: state.sex, age: state.age, payYears: state.base.payYears, freq: state.base.freq });
+    expect(got.errors).toEqual([]);
+    expect(got.missingRates).toEqual([]);
+    got.benefits.forEach((b, i) => {
+      const c = p.coverages[i];
+      expect([b.n, b.m]).toEqual([c.n, c.payYears]);
+      // 식을 적은 순서가 엔진의 계산 순서와 조금 달라(q + r − q·r/2 ↔ Σd − (Σd² − Σd²)/4) 끝자리만 다르다
+      expect(b.pvb / c.perUnit.pvb).toBeCloseTo(1, 7);
+      expect(b.gross / c.perUnit.gross).toBeCloseTo(1, 7);
+      expect(b.per100k).toBe(c.per100k.gross);          // 10만원당 보험료는 정확히 같다
+    });
+    expect(got.premium).toBe(p.effective.monthlyGross);
   });
 
   it("담보별 결과를 남긴다 (VERIFY_UPDATE=1) — 엑셀 검산 파일이 맞대어 보는 값", () => {

@@ -1,3 +1,4 @@
+import { groupModels } from "./formulas";
 import { hasContract, hasProduct, RATE_ROLE_LABEL, waiverRates, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
@@ -27,8 +28,11 @@ const yearsOf = (y?: number, a?: number) => (y ? `${y}년` : a ? `${a}세 만기
  * 모양을 바꾸면 판을 올리고 parse 가 옛 판도 읽게 둔다.
  *  v2 (2026-09-22): 기호의 정의 절 · 담보마다 세로 표 · 식은 한 줄에 하나(설명은 위) · 납입주기 k · 현가율 값 행 없음
  *     (2026-09-24) 값 표가 있는 위험률은 맨 뒤 "별첨 — 위험률 표"(연령 × 열) — 판은 그대로(없던 절이 늘었을 뿐, 옛 파서도 넘긴다)
+ *  v3 (2026-09-27): 식을 산출 순서의 절로 나눈다 — 3. 탈퇴자·유지자·납입자(집단마다 l·l′) · 4. 보험료의 현가(D·N·N*) ·
+ *     5. 보험금의 현가(담보마다 S·C·M·PVB) · 6. 보험료의 계산(P·G). 담보 표에 "집단" 행이 늘고, 탈퇴율 Q 를 따로 적는다.
+ *     이 표기는 calc.ts 가 읽어 그대로 계산한다 — 문서의 식이 계산의 정의다. v1·v2 도 계속 읽는다(parse 의 옛 자동 식 걸러내기).
  */
-export const STANDARD_FORMAT = "표준 산출방법서 v2";
+export const STANDARD_FORMAT = "표준 산출방법서 v3";
 
 /** 사업비 한 줄의 비율 표기 — 원문이 있으면 원문을, 없으면 정규화 값을 쓴다 */
 export function expenseRate(e: ExpenseItem): string {
@@ -124,6 +128,7 @@ function symbolBlocks(spec: MethodSpec): DocBlock[] {
     ["v", "현가율 = 1/(1+i)"],
     ["l_{x+t}", "t시점 유지자수 (기준 인원 l_x = 100,000)"],
     ["l′_{x+t}", "t시점 납입자수"],
+    ["S_t", "t년도 보장금액의 배수 — 연령 구간 배수와 면책을 반영한다(5.)"],
     ...(lapse ? [["w_{x+t}", "적용해지율 (1.3.)"] as [string, string]] : []),
     ...(lapse && spec.basis.lowRatio !== undefined ? [["ρ", "납입기간 중 해지환급금 비율 (1.3. — 무해지 0)"] as [string, string]] : []),
   ];
@@ -211,6 +216,12 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       Object.keys(u.overrides ?? {}).length ? Object.keys(u.overrides ?? {}).join(", ") : "— (모두 상속)",
     ], `units[${i}]`])));
   }
+  // 탈퇴 사유가 같은 담보는 유지자수·납입자수가 똑같다 — 그 집단 이름을 담보마다 적어 3. 의 식과 이어 준다
+  const groups = groupModels(spec);
+  if (groups.length) {
+    unitBlocks.push({ t: "note", path: groups.flatMap((g) => g.benefitIdx.map((i) => `benefits[${i}]`)).join("|"),
+      text: `유지자수·납입자수의 집단 ${groups.length}개 — ${groups.map((g) => `“${g.label}”(${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")})`).join(", ")}. 집단마다 l · l′ 를 3. 에서 한 번만 낸다.` });
+  }
   spec.benefits.forEach((b, i) => {
     unitBlocks.push(table(["담보", b.name], ([
       ["단위", b.unit ?? "주계약"],
@@ -221,6 +232,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       ["면책", b.waitDays ? `${b.waitDays}일` : "없음"],
       ["급부 위험률", b.role === "death" && !b.rateId ? "탈퇴 사유 전부" : rateName(b.rateId)],
       ["탈퇴 위험률", (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—"],
+      ["집단", groups.find((g) => g.benefitIdx.includes(i))?.label ?? "—"],
     ] as [string, string][]).map((row) => [row, `benefits[${i}]`])));
   });
   spec.benefits.forEach((b, i) => {
@@ -251,9 +263,12 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   for (const [section, list] of bySection) {
     const blocks: DocBlock[] = [];
     for (const f of list) {
-      blocks.push({ t: "p", text: f.label, path: f.path, kind: "label" });
-      blocks.push({ t: "formula", text: f.text, path: f.path });
-      if (f.note) blocks.push({ t: "note", text: f.note, path: f.path });
+      // 조건 경로에 식의 짝(formula:pv.N)도 단다 — 조건 카드가 자기 식 덩이만 정확히 짚을 수 있게.
+      // 조건 파일의 줄이 아니므로 줄 짝짓기(linesOfPaths)는 그냥 지나간다
+      const path = [f.path, f.key ? `formula:${f.key.replace(/:/g, ".")}` : ""].filter(Boolean).join("|") || undefined;
+      blocks.push({ t: "p", text: f.label, path, kind: "label" });
+      blocks.push({ t: "formula", text: f.text, path });
+      if (f.note) blocks.push({ t: "note", text: f.note, path });
     }
     out.push({ id: `formula-${no}`, title: `${no}. ${section}`, blocks });
     no++;

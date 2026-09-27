@@ -137,6 +137,13 @@ export interface FormulaSpec {
   note?: string;
   /** 이 식이 어느 조건에서 나왔는지 — "benefits[0]", "basis.lapse" (화면에서 조건과 짝지을 때 쓴다) */
   path?: string;
+  /**
+   * 자동으로 만든 식의 짝 — "group:g1" · "benefit:b1" · "pv:N" · "premium:G" (formulas.ts 가 붙인다).
+   * 계산(calc.ts)과 조건 카드가 이 짝으로 식을 찾는다. 조건 파일(YAML)·JSON 에는 싣지 않는다 — 늘 다시 만든다.
+   */
+  key?: string;
+  /** 사용자가 고친 식인지 (withFormulas 가 표시한다) */
+  edited?: boolean;
 }
 
 /** 가입 조건 한 줄 — 사업방법서·산출방법서의 "보험기간 | 보험료 납입기간 | 가입나이" 표 */

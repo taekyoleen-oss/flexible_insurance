@@ -165,9 +165,10 @@ describe("② 입력 조건 + 산출 결과 → 산출방법서 → 다시 읽�
     // 담보마다 세로 표 (표준 산출방법서 v2)
     expect(md).toContain("| 담보 | 사망·80% 이상 장해 |");
     expect(md).toContain("| 지급 사유 | 사망 또는 80% 이상 장해 시 |");
-    // 납입면제율이 아니라 납입자수 — 사망(q)과 80% 장해(r) 두 사유의 잔존 식, 설명 줄 아래에 식
-    expect(md).toContain("유지자수\nl_{x+t+1} = l_{x+t} × ( 1 − q_{x+t} − r_{x+t} + q_{x+t}·r_{x+t}/2 )");
-    expect(md).toContain("l′_{x+t+1} = l′_{x+t} × ( 1 − q_{x+t} − r_{x+t} + q_{x+t}·r_{x+t}/2 )");
+    // 납입면제율이 아니라 납입자수 — 사망(q)과 80% 장해(r) 두 사유를 묶은 탈퇴율 Q 의 잔존 식, 설명 줄 아래에 식
+    expect(md).toContain("Q_{x+t} = q_{x+t} + r_{x+t} − q_{x+t}·r_{x+t}/2");
+    expect(md).toContain("유지자수\nl_{x+t+1} = l_{x+t} × ( 1 − Q_{x+t} )");
+    expect(md).toContain("l′_{x+t+1} = l′_{x+t} × ( 1 − Q_{x+t} )");
     expect(md).not.toContain("납입면제 발생률");
   });
 
