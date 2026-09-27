@@ -21,7 +21,7 @@
  *   기호     v 현가율 · i 적용이율 · n 보험기간 · m 납입기간 · k 납입주기 · x 가입나이 · ρ 저해지 비율
  *            α_S α_P β_S β_G β′ γ 사업비 · 위험률 기호(q · r · f · w …)는 담보별 식의 첫 줄에서 정한다
  */
-import { benefitModels, withFormulas } from "./formulas";
+import { benefitModels, withFormulas, type BenefitModel } from "./formulas";
 import { rateTable, type FormulaSpec, type MethodSpec, type RateRef, type Sex } from "./spec";
 
 // ── 식 읽기 ──────────────────────────────────────────────────────────────────
@@ -378,6 +378,35 @@ const expenseOf = (spec: MethodSpec, symbol: string) => {
   return e?.rate ?? e?.times ?? 0;
 };
 
+/** 담보 하나를 계산할 준비 — 기간·위험률 계열·기호 값·식 목록. computeSpec 과 계산 표(calcSheets)가 같은 것을 쓴다 */
+function prepare(spec: MethodSpec, m: BenefitModel, contract: CalcContract, formulas: FormulaSpec[]) {
+  const b = m.b;
+  const n = Math.max(1, Math.min(contract.termYears ?? 999, (b.endAge ?? 110) + 1 - contract.age));
+  const pay = Math.min(contract.payYears, n);
+  const known: Record<string, number[]> = {};
+  const label: Record<string, string> = { ...SYM_LABEL };
+  const missing: string[] = [];
+  for (const { sym, rate } of [...m.group.syms, ...m.group.waivers, ...(m.event ? [m.event] : [])]) {
+    label[sym] = rate.name;
+    if (known[sym]) continue;
+    const { values, ok } = rateSeries(rate, contract, n + 1);
+    known[sym] = values;
+    if (!ok) missing.push(rate.name);
+  }
+  if (m.group.lapseRate !== undefined) known.w = Array.from({ length: n + 1 }, (_, t) => (t < pay ? m.group.lapseRate! : 0));
+  const scalar: Record<string, number> = {
+    n, m: pay, k: contract.freq, x: contract.age,
+    i: spec.basis.interest ?? 0, v: 1 / (1 + (spec.basis.interest ?? 0)), ρ: spec.basis.lowRatio ?? 0,
+    "α_S": expenseOf(spec, "α_S"), "α_P": (expenseOf(spec, "α_P") * Math.min(n, 20)) / 20,
+    "β_S": expenseOf(spec, "β_S"), "β_G": expenseOf(spec, "β_G"), "β′": expenseOf(spec, "β′"),
+    γ: expenseOf(spec, "γ"), α: expenseOf(spec, "α"), β: expenseOf(spec, "β"),
+  };
+  const text = formulas
+    .filter((f) => f.key && [`group:${m.group.id}`, `benefit:${b.id}`].includes(f.key) || /^(pv:|premium:(P|base|G)$)/.test(f.key ?? ""))
+    .map((f) => f.text).join("\n");
+  return { n, pay, known, scalar, label, missing, text };
+}
+
 /**
  * 산출방법서의 식으로 담보마다 보험료를 낸다 — 조건(위험률·금액·기간)과 식을 함께 쓴다.
  * 쓰는 식은 withFormulas 를 거친 것이라 **사용자가 고친 식이 그대로 계산에 반영된다.**
@@ -387,35 +416,15 @@ const expenseOf = (spec: MethodSpec, symbol: string) => {
 export function computeSpec(spec: MethodSpec, contract: CalcContract = CALC_DEFAULT): CalcResult {
   const formulas = withFormulas(spec).formulas;
   const out: CalcResult = { contract, benefits: [], premium: 0, missingRates: [], errors: [] };
-  const textOf = (keys: (string | RegExp)[]) => formulas
-    .filter((f) => f.key && keys.some((k) => (typeof k === "string" ? f.key === k : k.test(f.key!))))
-    .map((f) => f.text).join("\n");
   for (const m of benefitModels(spec)) {
     const b = m.b;
-    const n = Math.max(1, Math.min(contract.termYears ?? 999, (b.endAge ?? 110) + 1 - contract.age));
-    const pay = Math.min(contract.payYears, n);
+    const { n, pay, known, scalar, missing, text } = prepare(spec, m, contract, formulas);
+    for (const name of missing) if (!out.missingRates.includes(name)) out.missingRates.push(name);
+    const { eqs, skipped } = parseLines(text);
     const res: BenefitResult = {
       id: b.id, name: b.name, group: m.group.label, n, m: pay, amount: b.amount,
-      pvb: 0, nStar: 0, net: 0, base: 0, gross: 0, per100k: 0, premium: 0, skipped: [],
+      pvb: 0, nStar: 0, net: 0, base: 0, gross: 0, per100k: 0, premium: 0, skipped,
     };
-    const known: Record<string, number[]> = {};
-    const need = [...m.group.syms, ...m.group.waivers, ...(m.event ? [m.event] : [])];
-    for (const { sym, rate } of need) {
-      if (known[sym]) continue;
-      const { values, ok } = rateSeries(rate, contract, n + 1);
-      known[sym] = values;
-      if (!ok && !out.missingRates.includes(rate.name)) out.missingRates.push(rate.name);
-    }
-    if (m.group.lapseRate !== undefined) known.w = Array.from({ length: n + 1 }, (_, t) => (t < pay ? m.group.lapseRate! : 0));
-    const scalar: Record<string, number> = {
-      n, m: pay, k: contract.freq, x: contract.age,
-      i: spec.basis.interest ?? 0, v: 1 / (1 + (spec.basis.interest ?? 0)), ρ: spec.basis.lowRatio ?? 0,
-      "α_S": expenseOf(spec, "α_S"), "α_P": (expenseOf(spec, "α_P") * Math.min(n, 20)) / 20,
-      "β_S": expenseOf(spec, "β_S"), "β_G": expenseOf(spec, "β_G"), "β′": expenseOf(spec, "β′"),
-      γ: expenseOf(spec, "γ"), α: expenseOf(spec, "α"), β: expenseOf(spec, "β"),
-    };
-    const { eqs, skipped } = parseLines(textOf([`group:${m.group.id}`, `benefit:${b.id}`, /^pv:/, /^premium:(P|base|G)$/]));
-    res.skipped = skipped;
     try {
       const mo: Model = { defs: buildDefs(eqs), known, scalar, n };
       res.pvb = valueOf(mo, "PVB");
@@ -440,3 +449,135 @@ export function checkFormula(f: FormulaSpec): { ok: boolean; skipped: string[] }
   const { eqs, skipped } = parseLines(f.text);
   return { ok: eqs.length > 0, skipped };
 }
+
+// ── 계산 표 — 엑셀처럼 한 해 한 줄 ──────────────────────────────────────────
+/** 기호의 뜻. 위험률 기호(q · r · f · g)는 조건의 위험률 이름으로 덮어쓴다 */
+const SYM_LABEL: Record<string, string> = {
+  Q: "탈퇴율", w: "적용해지율", l: "유지자수", "l′": "납입자수", d: "지급자수 (급부 발생자)",
+  D: "유지자수의 현가", "D′": "납입자수의 현가", W: "해지자의 현가",
+  N: "유지자수 현가의 누계", "N′": "납입자수 현가의 누계",
+  S: "보장금액의 배수", E: "생존 지급 배수", C: "급부 발생자의 현가", M: "보험금 현가의 누계",
+  "N*": "연납 환산 납입기수", PVB: "보험금의 현가", P: "순보험료 (1원당)", P_base: "기준연납순보험료", G: "영업보험료 (1원당)",
+  v: "현가율", i: "적용이율", n: "보장기간(년)", m: "납입기간(년)", k: "납입주기별 계수", x: "가입나이",
+};
+/** 왼쪽부터 이 순서로 — 위험률 → 사람 수 → 사람 수의 현가·누계 → 보험금 */
+const COL_ORDER = ["Q", "l", "l′", "d", "D", "D′", "W", "N", "N′", "S", "E", "C", "M"];
+const DIGITS: Record<string, number> = { l: 2, "l′": 2, d: 4, D: 4, "D′": 4, W: 4, N: 2, "N′": 2, C: 6, M: 4, S: 4, E: 4, Q: 8, w: 6 };
+
+export interface CalcColumn {
+  sym: string;
+  label: string;
+  /** 이 열을 만든 식 (위험률 열은 표에서 온 값이라는 안내) */
+  formula: string;
+  kind: "rate" | "series";
+  digits: number;
+  values: number[];
+  /** 그 자리의 값이 어떤 값들로 나왔는지 (팝업) — 식에 나오는 기호와 그 값 */
+  parts: { ref: string; value: number }[][];
+}
+export interface CalcScalarRow { sym: string; label: string; formula: string; value: number; digits: number }
+export interface CalcSheet {
+  id: string; name: string; group: string;
+  n: number; m: number;
+  /** 줄마다 경과기간 t 와 그때의 나이 */
+  ages: number[];
+  cols: CalcColumn[];
+  /** 표 아래 — 한 값으로 나오는 것(N* · PVB · P · G) */
+  scalars: CalcScalarRow[];
+  amount?: number;
+  per100k: number;
+  premium: number;
+  error?: string;
+}
+export interface CalcSheets {
+  contract: CalcContract;
+  sheets: CalcSheet[];
+  /** 담보 보험료의 합(원) · 10만원당 합 */
+  premium: number;
+  per100k: number;
+  missingRates: string[];
+}
+
+/** 식에 나오는 계열·기호를 자리순으로 (팝업에서 "이 값들로 나왔다" 를 보이려고) */
+function refsOf(node: Node, out: { name: string; idx?: Node }[] = []): { name: string; idx?: Node }[] {
+  switch (node.t) {
+    case "ref": if (node.idx) refsOf(node.idx, out); out.push({ name: node.name, idx: node.idx }); break;
+    case "bin": refsOf(node.a, out); refsOf(node.b, out); break;
+    case "neg": refsOf(node.a, out); break;
+    case "call": node.args.forEach((a) => refsOf(a, out)); break;
+    case "sum": refsOf(node.from, out); refsOf(node.to, out); refsOf(node.body, out); break;
+  }
+  return out;
+}
+
+/**
+ * 산출방법서의 식을 한 해 한 줄의 표로 — 엑셀에서 세로로 늘어놓고 보던 그 모양.
+ * 열마다 그 열을 만든 식을 달고, 줄마다 그 값이 어떤 값들로 나왔는지도 담는다(화면이 팝업으로 보인다).
+ */
+export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAULT): CalcSheets {
+  const formulas = withFormulas(spec).formulas;
+  const out: CalcSheets = { contract, sheets: [], premium: 0, per100k: 0, missingRates: [] };
+  for (const bm of benefitModels(spec)) {
+    const b = bm.b;
+    const { n, pay, known, scalar, label, missing, text } = prepare(spec, bm, contract, formulas);
+    for (const name of missing) if (!out.missingRates.includes(name)) out.missingRates.push(name);
+    // 지급자수 d 는 문서의 C 식에서 v^{t+½} 를 뺀 부분이다 — 표에서만 따로 보여 준다
+    const { eqs } = parseLines(`${text}\n${bm.payout}`);
+    const sheet: CalcSheet = {
+      id: b.id, name: b.name, group: bm.group.label, n, m: pay,
+      ages: Array.from({ length: n + 1 }, (_, t) => contract.age + t),
+      cols: [], scalars: [], amount: b.amount, per100k: 0, premium: 0,
+    };
+    try {
+      const mo: Model = { defs: buildDefs(eqs), known, scalar, n };
+      const at = (name: string, t: number) => valueOf(mo, name, t);
+      const rateSyms = [...new Set([...bm.group.syms, ...bm.group.waivers, ...(bm.event ? [bm.event] : [])].map((x) => x.sym))];
+      const sourceOf = (sym: string) => [...bm.group.syms, ...bm.group.waivers, ...(bm.event ? [bm.event] : [])].find((x) => x.sym === sym)?.rate;
+      for (const sym of [...rateSyms, ...(known.w ? ["w"] : [])]) {
+        const r = sourceOf(sym);
+        sheet.cols.push({
+          sym, label: label[sym] ?? sym, kind: "rate", digits: 8, values: known[sym] ?? [], parts: [],
+          formula: sym === "w" ? "조건 1.3. 적용해지율 — 납입기간 중" : `위험률 표에서 온 값${r?.source ? ` — ${r.source}` : ""}`,
+        });
+      }
+      const names = [...COL_ORDER.filter((x) => mo.defs.has(x)), ...[...mo.defs.keys()].filter((x) => !COL_ORDER.includes(x) && isSeries(mo, x))];
+      for (const sym of names) {
+        const d = mo.defs.get(sym)!;
+        const eq = d.direct ?? d.recur?.eq ?? [...d.points.values()][0];
+        if (!eq) continue;
+        const refs = refsOf(eq.expr).filter((r) => r.name !== "v" && (mo.known[r.name] || isSeries(mo, r.name)));
+        sheet.cols.push({
+          sym, label: label[sym] ?? sym, kind: "series", digits: DIGITS[sym] ?? 4, formula: eq.line,
+          values: Array.from({ length: n + 1 }, (_, t) => at(sym, t)),
+          parts: Array.from({ length: n + 1 }, (_, t) => {
+            const base = d.recur && t >= d.recur.off ? t - d.recur.off : t;
+            return refs.map((r) => {
+              const i = r.idx ? Math.round(evalNode(r.idx, mo, { t: base, u: base }, new Map(), new Set())) : base;
+              return { ref: `${r.name}${r.idx ? `(${contract.age + i})` : ""}`, value: at(r.name, i) };
+            });
+          }),
+        });
+      }
+      for (const sym of ["N*", "PVB", "P", "P_base", "G"]) {
+        const d = mo.defs.get(sym);
+        if (!d) continue;
+        const eq = d.scalar ?? d.direct;
+        sheet.scalars.push({ sym, label: label[sym] ?? sym, formula: eq?.line ?? "", value: valueOf(mo, sym), digits: sym === "N*" ? 2 : 8 });
+      }
+      sheet.per100k = Math.round(valueOf(mo, "G") * 1e5);
+      sheet.premium = sheet.per100k * ((b.amount ?? 0) / 1e5);
+      out.premium += sheet.premium;
+      out.per100k += sheet.per100k;
+    } catch (e) {
+      sheet.error = e instanceof Error ? e.message : String(e);
+    }
+    out.sheets.push(sheet);
+  }
+  return out;
+}
+
+/** 자리를 가진 계열인지 (스칼라 정의만 있는 것은 표의 열이 아니다) */
+const isSeries = (mo: Model, sym: string) => {
+  const d = mo.defs.get(sym);
+  return !!d && (!!d.direct || !!d.recur || d.points.size > 0);
+};

@@ -10,6 +10,7 @@ import { fillWithLlm, LLM_FIELDS, type LlmAsk } from "@/lib/methoddoc/llm";
 import { docToHtml, docToMarkdown, renderMethodDoc, type DocBlock } from "@/lib/methoddoc/render";
 import { validateSpec, type Confidence, type Evidence, type MethodSpec, type ParseResult } from "@/lib/methoddoc/spec";
 import { applySpecToPlan, openSpecAsPlan, planFromSpec, readSpecJson, specFromPlanStorage } from "@/lib/methoddoc-bridge";
+import { evaluateProduct } from "@/lib/plan-state";
 
 const TONE: Record<Confidence, string> = {
   high: "bg-sky/15 text-sky", medium: "bg-[#fef3c7] text-[#92400e]", low: "bg-[#fee2e2] text-[#991b1b]",
@@ -59,7 +60,7 @@ export default function MethodPage() {
   const [tab, setTab] = useState<"review" | "doc" | "source">("review");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   /** 다른 앱(Life_ins_Doc_Convert_Studio 등)이 낸 MethodSpec JSON — 검수 없이 설계 전체로 옮긴다 */
-  const [json, setJson] = useState<{ name: string; spec: MethodSpec; warnings: string[]; done: boolean } | null>(null);
+  const [json, setJson] = useState<{ name: string; spec: MethodSpec; warnings: string[]; premium: number; done: boolean } | null>(null);
   const file = useRef<HTMLInputElement>(null);
   const folder = useRef<HTMLInputElement>(null);
 
@@ -95,7 +96,11 @@ export default function MethodPage() {
       try {
         const spec = readSpecJson(await files[0].text());
         setErr(null); setRes(null); setDoc(null); setQueue([]);
-        setJson({ name: files[0].name, spec, warnings: planFromSpec(spec).warnings, done: false });
+        const from = planFromSpec(spec);
+        // 받은 파일로 바로 계산해 보여 준다 — "파일을 불러오면 보험료가 나온다" 를 넣기 전에 확인할 수 있게
+        let premium = 0;
+        try { premium = evaluateProduct(from.state).effective.monthlyGross; } catch { premium = 0; }
+        setJson({ name: files[0].name, spec, warnings: from.warnings, premium, done: false });
       } catch (e) { setErr({ msg: e instanceof SyntaxError ? "JSON 을 읽지 못했습니다." : e instanceof Error ? e.message : String(e) }); }
       return;
     }
@@ -203,6 +208,10 @@ export default function MethodPage() {
             <p className="text-sm text-navy/80">
               <b>{s.meta.productName || json.name}</b> · 계약정보 {s.contract.age !== undefined ? `${s.contract.age}세 ${s.contract.sex === "F" ? "여" : "남"}` : "기본값"} · 담보 {s.benefits.length}개 · 위험률 {s.rates.length}개(값 표 {tables}개)
               {s.units.length > 1 && <> · 계약 단위 {s.units.length}개</>}
+            </p>
+            <p className="mt-1 text-sm">
+              이 파일로 계산한 보험료 <b className="text-lg text-sky">{json.premium.toLocaleString("ko-KR")}원</b>
+              <span className="ml-1 text-xs text-navy/55">/ 월 (계약정보 기본값 기준 — 넣은 뒤 상품 만들기 M02 에서 바꿉니다)</span>
             </p>
             <p className="mt-1 text-xs text-navy/55">
               Life_ins_Doc_Convert_Studio 등 다른 앱이 낸 조건입니다. 검수 없이 기초율·사업비·위험률 표(시트 열)·담보를 통째로 옮겨 &quot;상품 만들기&quot; 설계를 바꿉니다. 계약정보(성별·가입나이·기간·가입금액)는 JSON 에 없으면 기본값으로 두고 상품 만들기 M02 에서 고칩니다.

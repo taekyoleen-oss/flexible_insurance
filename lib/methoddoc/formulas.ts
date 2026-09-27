@@ -129,6 +129,11 @@ export interface BenefitModel {
   legend: string[];
   lines: string[];
   note?: string;
+  /**
+   * 지급자수 d 의 식. 문서에는 싣지 않는다 — 급부 발생자의 현가 C 식에서 v^{t+½} 를 뺀 부분이다.
+   * 계산 표(calc.ts `calcSheets`)가 유지자수·납입자수와 나란히 보여 주려고 쓴다.
+   */
+  payout: string;
 }
 
 /** 면책 개월 — 계산하는 앱(자유설계보험)과 같은 환산(30.4일 = 1개월) */
@@ -155,18 +160,15 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
       else if (rate) { event = { sym: "g", rate }; legend.push(`g_x : ${rate.name}`); }
     }
     const lines: string[] = [];
+    const ev = b.role === "death" ? (group.syms.length === 1 ? `${group.syms[0].sym}_{x+t}` : "Q_{x+t}") : `${event?.sym ?? "g"}_{x+t}`;
+    const payout = `d_{x+t} = l_{x+t}·${ev}${half}`;
     // 보장금액 배수 S — 연령 구간 배수 × 면책 (첫해)
     const mo = waitMonths(b.waitDays), steps = stepsText(b);
     const survival = b.role === "other" && !!b.points?.length;
     const parts = [survival ? "0" : steps ?? "1", ...(mo && !survival ? [`if( t = 0, 1 − ${mo}/12, 1 )`] : [])];
     lines.push(mo ? `보장금액의 배수 — 면책 ${b.waitDays}일이라 첫해는 ( 1 − ${mo}/12 ) 배` : "보장금액의 배수", `S_t = ${parts.join(" × ")}`);
     // 급부 발생자
-    if (b.role === "death") {
-      const Q = group.syms.length === 1 ? `${group.syms[0].sym}_{x+t}` : "Q_{x+t}";
-      lines.push("급부 발생자 — 탈퇴자 전부가 급부 대상이다", `C_{x+t} = l_{x+t}·${Q}${half}·v^{t+½}`);
-    } else {
-      lines.push("급부 발생자", `C_{x+t} = l_{x+t}·${event?.sym ?? "g"}_{x+t}${half}·v^{t+½}`);
-    }
+    lines.push(b.role === "death" ? "급부 발생자 — 탈퇴자 전부가 급부 대상이다" : "급부 발생자", `C_{x+t} = l_{x+t}·${ev}${half}·v^{t+½}`);
     lines.push("보험금 현가의 누계", "M_{x+t} = Σ_{u=t}^{n−1} S_u·C_{x+u}");
     if (survival) {
       lines.push("생존 지급 시점의 배수", `E_t = ${b.points!.map((p) => `if( t = ${p.age} − x, ${p.multiple}, 0 )`).join(" + ")}`,
@@ -175,7 +177,7 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
     const note = b.role === "death" && group.exits.length > 1
       ? `${group.exits.map(reasonOf).join("·")} 모두 같은 보험금을 지급하므로 탈퇴자 전부가 급부 대상이다.`
       : b.role === "incidence" ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
-    return { idx, b, group, event, legend, lines, ...(note ? { note } : {}) };
+    return { idx, b, group, event, legend, lines, payout, ...(note ? { note } : {}) };
   });
 }
 
