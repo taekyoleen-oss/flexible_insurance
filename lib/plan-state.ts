@@ -147,11 +147,14 @@ export function tabPlanInput(s: PlanState, tab: PlanTab, r: ResolvedSheet): { in
   const c0 = tabConditions(s, tab);
   // 탈퇴 사유는 산출방법서의 잔존 식(1 − q − k + q·k/2)으로 묶는다.
   // 사망형은 탈퇴 사유 전부에 같은 보험금을 준다(종신의 "사망 또는 80% 이상 장해") → 급부 = 탈퇴.
+  // 납입면제 사유 가운데 그 담보의 탈퇴 사유인 것(예: 암진단 담보의 암 발생)은 탈퇴로 이미 줄었으므로 납입자수에서 다시 빼지 않는다
+  const waiverIds = c0.waiver ? waiverCols(tab.sheet) : [];
   const coverages: PlanCoverage[] = tab.coverages.map((c) => ({
     id: c.id, label: c.label, kind: c.kind, amount: c.amount, endAge: c.endAge,
     event: c.kind === "survival" || c.kind === "death" ? [] : columnArray(tab.sheet, r, c.eventColId),
     exit: combineColumns(tab.sheet, r, c.exitColIds),
     waitFactor: waitFactorOf(c.waitMonths),
+    ...(waiverIds.some((id) => c.exitColIds.includes(id)) ? { waiverRate: combineColumns(tab.sheet, r, waiverIds.filter((id) => !c.exitColIds.includes(id))) } : {}),
     steps: c.steps, points: c.points,
   }));
   const input: PlanInput = {
@@ -159,7 +162,7 @@ export function tabPlanInput(s: PlanState, tab: PlanTab, r: ResolvedSheet): { in
     payYears: c0.payYears, freq: c0.freq,
     interest: c0.interest, standardInterest: c0.standardInterest,
     // 납입자수 l′ 는 담보의 탈퇴 사유로 줄고, 여기서 켠 "추가 납입면제 사유"(보장은 이어지고 납입만 멈추는 사유)로 더 준다
-    waiverRate: c0.waiver ? combineColumns(tab.sheet, r, waiverCols(tab.sheet)) : [],
+    waiverRate: c0.waiver ? combineColumns(tab.sheet, r, waiverIds) : [],
     expenses: c0.expenses,
     lowSurrender: c0.low.on ? { ratio: c0.low.ratio, lapseRate: c0.low.lapseRate } : undefined,
   };

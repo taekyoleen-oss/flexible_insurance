@@ -39,6 +39,8 @@ export interface PlanCoverage {
   exit: number[];        // 연령 인덱스 탈퇴율
   endAge: number;        // 보장 종료 연령(이 나이까지 보장)
   waitFactor: number;    // 면책: 첫해 급부 배율(90일 면책 → 0.75). 1이면 면책 없음
+  /** 이 담보의 납입면제 발생률 — 없으면 input.waiverRate. 납입면제 사유가 이 담보의 탈퇴 사유이기도 하면 탈퇴로 이미 줄었으므로 뺀 것을 넘긴다 */
+  waiverRate?: number[];
   steps: PlanStep[];     // 연령 구간별 보장금액 배수(증액·감액). 비어 있으면 전 기간 1.0
   points: PlanPoint[];   // survival 전용 지급 시점
 }
@@ -116,7 +118,7 @@ function coverage(c: PlanCoverage, input: PlanInput, n: number, N: number): Plan
   if (c.kind === "survival") for (const p of c.points) { const t = p.age - age; if (t >= 0 && t <= n) C[t] += p.multiple; }
   const contract: Contract = { age, termYears: n, payYears: m, freq, S, C };
   const e = scaleAlphaP(expenses, n);
-  const basis = { q: c.exit, f: input.waiverRate, event: useEvent };
+  const basis = { q: c.exit, f: c.waiverRate ?? input.waiverRate, event: useEvent };
 
   const k = commutation({ interest: input.interest, ...basis }, age, n);
   const ks = commutation({ interest: input.standardInterest, ...basis }, age, n);

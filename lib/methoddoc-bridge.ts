@@ -100,7 +100,7 @@ export function applySpecToPlan(spec: MethodSpec, accepted: Evidence[]): number 
     if (t.id !== s.active) return t;
     const added = spec.rates.flatMap((r, i) => {
       if (!take.has(`rates[${i}]`) || KIND[r.role] === null || t.sheet.columns.some((c) => same(c.name, r.name))) return [];
-      return [rateColumn(r, s.sex, t.sheet.ages)];
+      return [rateColumn(r, s.sex, t.sheet.ages, spec.basis.waiverRateIds)];
     });
     if (!added.length) return t;
     count += added.length;
@@ -113,12 +113,13 @@ export function applySpecToPlan(spec: MethodSpec, accepted: Evidence[]): number 
 }
 
 /** 위험률 계열 → 시트 열. 표에 없는 나이는 바로 앞 나이 값(첫 나이 앞은 첫 값) — 시트 평가(toAgeArray)와 같은 규칙 */
-function rateColumn(r: RateRef, sex: Sex, ages: number[]): RateColumn {
+function rateColumn(r: RateRef, sex: Sex, ages: number[], waiverIds: string[] = []): RateColumn {
   const t = table(r, sex);
   const at = t ? new Map(t.ages.map((a, i) => [Math.round(a), Number(t.values[i]) || 0])) : null;
   let last = t ? Number(t.values[0]) || 0 : 0;
   const cells = ages.map((a) => { if (at?.has(a)) last = at.get(a)!; return String(last); });
-  return { id: newColId(), name: r.name, kind: KIND[r.role]!, waiver: r.role === "waiver", cells, ...(r.source ? { source: r.source } : {}) };
+  // 납입면제 사유: 유형이 납입면제인 것 + basis.waiverRateIds(급부이기도 한 위험률 — 예: 암 발생률). 시트 열은 유형과 납입면제 표시를 따로 가진다
+  return { id: newColId(), name: r.name, kind: KIND[r.role]!, waiver: r.role === "waiver" || waiverIds.includes(r.id), cells, ...(r.source ? { source: r.source } : {}) };
 }
 
 // ── MethodSpec JSON → 설계 전체 ──────────────────────────────────────────────
@@ -222,7 +223,7 @@ export function planFromSpec(spec: MethodSpec): { state: PlanState; warnings: st
       const t = table(r, sex);
       if (!t) warnings.push(`위험률 "${r.name}" 에 값 표가 없어 0 으로 넣었습니다 — 시트에 붙여넣으세요`);
       else if (t.sex && t.sex !== sex) warnings.push(`위험률 "${r.name}" 표는 ${t.sex === "M" ? "남" : "여"}자 표입니다(계약정보 ${sex === "M" ? "남" : "여"}) — 그 성별 표를 시트에 붙여넣으세요`);
-      const col = { ...rateColumn(r, sex, ages), id: fresh("r") };
+      const col = { ...rateColumn(r, sex, ages, spec.basis.waiverRateIds), id: fresh("r") };
       colOf.set(r.id, col.id);
       return col;
     });

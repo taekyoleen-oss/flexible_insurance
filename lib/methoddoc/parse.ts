@@ -320,7 +320,6 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       const v = cover(new RegExp(`^${k}$`));
       if (v) add(path, k, v[0], `${k} ${v[0]}`, `표 ${v[1] + 1}`, "high");
     }
-    readStandard(paragraphs, spec, evidence, format!);
     // 1.4 의 문장이 납입면제 여부다 — 위험률 목록에 납입면제 계열이 있어도 쓰지 않을 수 있다
     const w = paragraphs.find((p) => /(납입만 면제되어 더 준다|납입면제를 적용하나|별도의 납입면제율을 두지 않는다)/.test(p));
     if (w) {
@@ -328,6 +327,16 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       if (i >= 0) evidence.splice(i, 1);
       add("basis.waiver", "납입면제", !/두지 않는다/.test(w), w.slice(0, 120), "표준 양식 1.4", "high");
     }
+    // (식 비교 전에 읽는다 — 자동 식이 납입면제 사유에 따라 달라진다)
+    // 1.4 의 "f_x : A · B" — 납입면제 사유. 유형이 납입면제가 아닌 위험률(예: 암진단 담보의 암 발생률)은 basis.waiverRateIds 로 (담보별 식의 f 줄은 "—" 가 붙어 다르다)
+    const fx = paragraphs.find((p) => /^f_x\s*:/.test(p.trim()) && !p.includes("—"));
+    if (fx && spec.basis.waiver) {
+      const ids = fx.trim().replace(/^f_x\s*:\s*/, "").split(/\s*·\s*/)
+        .map((nm) => spec.rates.find((r) => r.name === nm.trim())).filter((r): r is RateRef => !!r && r.role !== "waiver").map((r) => r.id);
+      spec.basis.waiverRateIds = ids.length ? ids : undefined;
+      add("basis.waiverRateIds", "납입면제 사유", ids.join(", ") || "없음", fx.slice(0, 120), "표준 양식 1.4", "high", false);
+    }
+    readStandard(paragraphs, spec, evidence, format!);
   } else spec.sections = outlineSections(doc);
 
   const missing = ["meta.productName", "basis.interest"]

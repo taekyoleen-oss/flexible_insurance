@@ -1,4 +1,4 @@
-import { hasContract, hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
+import { hasContract, hasProduct, RATE_ROLE_LABEL, waiverRates, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
  * MethodSpec → 산출방법서. 앱에 딸리지 않는다(import 는 spec 하나뿐).
@@ -185,10 +185,10 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     }
   } else basisBlocks.push({ t: "p", text: "적용하지 않음 (w = 0).", path: "basis.lapse" });
   basisBlocks.push({ t: "p", text: "1.4. 납입면제(납입자수)에 관한 사항", path: "basis.waiver" });
-  const waiverRates = spec.rates.filter((r) => r.role === "waiver");
-  if (spec.basis.waiver && waiverRates.length) {
-    basisBlocks.push({ t: "p", path: "basis.waiver", text: "납입자수 l′ 는 담보의 탈퇴 사유로 유지자수와 함께 줄고, 아래 사유가 생기면 보장은 유지한 채 납입만 면제되어 더 준다." });
-    basisBlocks.push({ t: "formula", path: "basis.waiver", text: `f_x : ${waiverRates.map((r) => r.name).join(" · ")}` });
+  const wr = waiverRates(spec);
+  if (spec.basis.waiver && wr.length) {
+    basisBlocks.push({ t: "p", path: "basis.waiver|basis.waiverRateIds", text: "납입자수 l′ 는 담보의 탈퇴 사유로 유지자수와 함께 줄고, 아래 사유가 생기면 보장은 유지한 채 납입만 면제되어 더 준다. 그 담보의 탈퇴 사유이기도 한 사유는 탈퇴로 이미 줄었으므로 다시 빼지 않는다(3. 담보별 식)." });
+    basisBlocks.push({ t: "formula", path: "basis.waiver|basis.waiverRateIds", text: `f_x : ${wr.map((r) => r.name).join(" · ")}` });
   } else {
     basisBlocks.push({ t: "p", path: "basis.waiver", text: spec.basis.waiver
       ? "납입면제를 적용하나 위험률이 지정되지 않았습니다."

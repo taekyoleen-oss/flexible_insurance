@@ -1,4 +1,4 @@
-import type { FormulaSpec, MethodSpec, RateRef } from "./spec";
+import { waiverRates, type FormulaSpec, type MethodSpec, type RateRef } from "./spec";
 
 /**
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
@@ -47,12 +47,14 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   const out: FormulaSpec[] = [];
   const lapse = (spec.basis.lapse ?? []).some((l) => l.rate > 0);
   const low = lapse && spec.basis.lowRatio !== undefined;
-  const waivers = spec.basis.waiver ? spec.rates.filter((r) => r.role === "waiver") : [];
+  const allWaivers = waiverRates(spec);
   const multi = spec.benefits.length > 1;
 
   // 담보별 유지자수·납입자수·급부 — 기호 정의 → 설명 한 줄 → 식 한 줄 (기존 산출방법서 모양)
   spec.benefits.forEach((b, bi) => {
     const cols = (b.exitRateIds ?? []).map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r);
+    // 납입면제 사유 가운데 이 담보의 탈퇴 사유인 것은 탈퇴로 이미 줄었다 — 납입자수에서 다시 빼지 않는다
+    const waivers = allWaivers.filter((w) => !cols.includes(w));
     const count = { q: cols.filter((c) => c.role === "death").length, r: cols.filter((c) => c.role !== "death").length };
     const seen = { q: 0, r: 0 };
     const syms = cols.map((c) => {
@@ -83,6 +85,11 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
     } else if (b.role === "incidence") {
       const ev = cols.findIndex((c) => c.id === b.rateId);
       lines.push("급부 발생자", `C_{x+t} = l_{x+t}·${ev >= 0 ? syms[ev] : "g"}_{x+t}${half}·v^{t+½}`);
+      // 면책: 첫해는 면책 기간만큼 보장하지 않는다 — 계산하는 앱(자유설계보험)은 개월로 받아 첫해 급부에 (1 − 개월/12)를 곱한다
+      if (b.waitDays) {
+        const mo = Math.round(b.waitDays / 30.4);
+        lines.push(`면책 ${b.waitDays}일 — 첫해 급부는 (1 − ${mo}/12) 배`, `S_0 = S × ( 1 − ${mo}/12 )`);
+      }
     } else if (b.role === "recurring") {
       lines.push(`급부 — g : ${spec.rates.find((r) => r.id === b.rateId)?.name ?? "연간 기대 지급일수"}`, `C_{x+t} = l_{x+t}·g_{x+t}${half}·v^{t+½}`);
     }
@@ -93,11 +100,12 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
       section: "계산기수",
       // 이 담보 + 그 탈퇴 위험률 + (있으면) 납입면제·해지율 — 어느 조건을 골라도 이 식이 표시되게
       path: [`benefits[${bi}]`, ...cols.map((c) => `rates[${spec.rates.indexOf(c)}]`),
-        ...(waivers.length ? ["basis.waiver", ...waivers.map((w) => `rates[${spec.rates.indexOf(w)}]`)] : []),
+        ...(waivers.length ? ["basis.waiver", ...(spec.basis.waiverRateIds?.length ? ["basis.waiverRateIds"] : []), ...waivers.map((w) => `rates[${spec.rates.indexOf(w)}]`)] : []),
         ...(lapse ? ["basis.lapse"] : [])].join("|"),
       label: multi ? `유지자수·납입자수 — ${b.unit ? `${b.unit} ` : ""}${b.name}` : `유지자수·납입자수 — ${b.name}`,
       text: [...legend, "", ...lines].join("\n"),
-      note: `${why}납입자수는 ${waivers.length ? "탈퇴 사유에 더해 f 사유가 생길 때도" : "탈퇴 사유로 유지자수와 똑같이"} 줄어든다 — 별도의 납입면제율을 곱하지 않는다.`,
+      note: `${why}납입자수는 ${waivers.length ? "탈퇴 사유에 더해 f 사유가 생길 때도" : "탈퇴 사유로 유지자수와 똑같이"} 줄어든다 — 별도의 납입면제율을 곱하지 않는다.`
+        + (allWaivers.length > waivers.length ? ` 납입면제 사유 중 ${allWaivers.filter((w) => cols.includes(w)).map(reasonOf).join("·")} 은(는) 이 담보의 탈퇴 사유라 탈퇴로 이미 줄었다.` : ""),
     });
   });
 

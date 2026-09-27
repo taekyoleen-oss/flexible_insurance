@@ -45,13 +45,18 @@ export function planToSpec(s: PlanState, p: ProductResult): MethodSpec {
       const ref: RateRef = {
         id: `${tab.id}:${c.id}`,
         name: s.tabs.length > 1 ? `${tab.name} · ${c.name}` : c.name,
-        role: c.waiver ? "waiver" : ROLE[c.kind],
+        // 납입면제만 하는 열은 "waiver", 급부·탈퇴에도 쓰는 열(예: 암 발생 — 암진단 급부이자 다른 담보의 납입면제 사유)은 제 유형 + basis.waiverRateIds
+        role: c.waiver && c.kind === "other" ? "waiver" : ROLE[c.kind],
         source: [c.source, formulas.length ? `시트 수식 ${formulas.length}칸 (예: ${formulas[0]})` : ""].filter(Boolean).join(" · ") || "시트 직접 입력·표",
         table: { ages: [...tab.sheet.ages], values: [...(tr?.sheet.byId[c.id] ?? [])], sex: s.sex },
       };
       spec.rates.push(ref);
     }
   }
+
+  // 급부·탈퇴에도 쓰면서 납입면제 사유인 열 — 유형은 그대로, basis.waiverRateIds 로
+  const waiverRateIds = s.tabs.flatMap((tab) => tab.sheet.columns.filter((c) => c.waiver && c.kind !== "other").map((c) => `${tab.id}:${c.id}`));
+  if (waiverRateIds.length) spec.basis.waiverRateIds = waiverRateIds;
 
   // 담보·계약 단위
   for (const tab of s.tabs) {

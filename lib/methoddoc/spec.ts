@@ -116,6 +116,12 @@ export interface BasisSpec {
   /** 평균공시이율 */
   averagePublished?: number;
   waiver?: boolean;
+  /**
+   * 납입만 면제되는 사유(보장은 이어짐)의 위험률 id — 유형과 상관없이. 유형이 waiver 인 위험률은 적지 않아도 사유다.
+   * 예: 종신보험(암진단 포함) — 암 발생률은 암진단 담보의 급부이자 사망 담보의 납입면제 사유.
+   * 그 담보의 탈퇴 사유이기도 한 것은 탈퇴로 이미 줄었으므로 그 담보의 납입자수에서 다시 빼지 않는다.
+   */
+  waiverRateIds?: string[];
   /** 적용해지율 — 종류별로 다를 수 있다 */
   lapse?: { label?: string; rate: number; duringPayOnly?: boolean }[];
   /** 저해지·무해지 환급률(소수). 0 = 무해지 */
@@ -174,6 +180,10 @@ export function rateTable(r: RateRef, sex?: Sex): { ages: number[]; values: numb
   const t = sex ? r.tables?.[sex] : undefined;
   return t ? { ...t, sex } : r.table;
 }
+
+/** 납입면제 사유 위험률 — 유형이 waiver 인 것 + basis.waiverRateIds. 납입면제를 켜지 않았으면 없다 */
+export const waiverRates = (spec: MethodSpec): RateRef[] =>
+  spec.basis.waiver ? spec.rates.filter((r) => r.role === "waiver" || spec.basis.waiverRateIds?.includes(r.id)) : [];
 
 /** 가입 조건에 적힌 것이 있는지 */
 export const hasProduct = (p?: ProductInfo): p is ProductInfo =>
@@ -269,6 +279,7 @@ export function validateSpec(spec: MethodSpec): string[] {
   for (const e of spec.expenses) {
     if (e.rate !== undefined && (e.rate < 0 || e.rate > 1)) out.push(`사업비 ${e.group}/${e.basis} = ${e.rate} 는 범위(0~100%) 밖입니다`);
   }
+  for (const id of spec.basis.waiverRateIds ?? []) if (!spec.rates.some((r) => r.id === id)) out.push(`납입면제 사유 위험률(${id})이 목록에 없습니다`);
   for (const b of spec.benefits) {
     if (b.rateId && !spec.rates.some((r) => r.id === b.rateId)) out.push(`담보 "${b.name}"의 급부 위험률(${b.rateId})이 목록에 없습니다`);
     for (const id of b.exitRateIds ?? []) if (!spec.rates.some((r) => r.id === id)) out.push(`담보 "${b.name}"의 탈퇴 위험률(${id})이 목록에 없습니다`);
