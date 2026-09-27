@@ -21,7 +21,7 @@
  *   기호     v 현가율 · i 적용이율 · n 보험기간 · m 납입기간 · k 납입주기 · x 가입나이 · ρ 저해지 비율
  *            α_S α_P β_S β_G β′ γ 사업비 · 위험률 기호(q · r · f · w …)는 담보별 식의 첫 줄에서 정한다
  */
-import { benefitModels, withFormulas, type BenefitModel } from "./formulas";
+import { benefitModels, waitMonths, withFormulas, type BenefitModel } from "./formulas";
 import { rateTable, type FormulaSpec, type MethodSpec, type RateRef, type Sex } from "./spec";
 
 // ── 식 읽기 ──────────────────────────────────────────────────────────────────
@@ -330,6 +330,10 @@ function series(name: string, i: number, mo: Model, cache: Map<string, number>, 
   } finally { busy.delete(key); }
 }
 
+/** 자리 식(t · u · n · m 과 수)의 값 — 엑셀 수식으로 옮길 때 줄 번호를 구한다 */
+export const evalIndex = (node: Node, vars: Record<string, number>): number =>
+  evalNode(node, { defs: new Map(), known: {}, scalar: vars, n: vars.n ?? 0 }, vars, new Map(), new Set(), true);
+
 /** 이름 하나의 값 — 자리를 주면 계열, 안 주면 스칼라 */
 export function valueOf(mo: Model, name: string, i?: number): number {
   const cache = new Map<string, number>(), busy = new Set<string>();
@@ -469,18 +473,38 @@ export interface CalcColumn {
   label: string;
   /** 이 열을 만든 식 (위험률 열은 표에서 온 값이라는 안내) */
   formula: string;
-  kind: "rate" | "series";
+  /** rate 표에서 온 값 · discount 이율에서 나온 현가율 · series 식으로 만든 계열 */
+  kind: "rate" | "discount" | "series";
   digits: number;
   values: number[];
   /** 그 자리의 값이 어떤 값들로 나왔는지 (팝업) — 식에 나오는 기호와 그 값 */
   parts: { ref: string; value: number }[][];
+  /** 읽어 둔 식 — 엑셀 수식으로 옮길 때 쓴다(위험률·현가율 열은 없다) */
+  eq?: Equation;
+  /** 점화식이면 앞자리를 몇 칸 쓰는지 (l_{x+t+1} = … → 1). 그 앞줄은 init */
+  offset: number;
+  init?: number;
 }
-export interface CalcScalarRow { sym: string; label: string; formula: string; value: number; digits: number }
+export interface CalcScalarRow { sym: string; label: string; formula: string; value: number; digits: number; eq?: Equation }
+/** 계산에 앞서 정한 값 — 계약 한 점과 기초율. 이것과 위험률만 있으면 나머지는 식으로 나온다 */
+export interface CalcInput {
+  label: string;
+  /** 엑셀에서 쓸 이름 (없으면 값만) */
+  name?: string;
+  value: number | string;
+  /** 소수 자리 (글자면 없음) */
+  digits?: number;
+  note?: string;
+  /** 다른 입력에서 나오는 값(현가율) — 엑셀에서도 수식으로 */
+  formula?: string;
+}
 export interface CalcSheet {
   id: string; name: string; group: string;
   n: number; m: number;
   /** 줄마다 경과기간 t 와 그때의 나이 */
   ages: number[];
+  /** 왼쪽에 늘어놓는 계약·기초율 — 내려받은 파일만으로 다시 세울 수 있게 */
+  inputs: CalcInput[];
   cols: CalcColumn[];
   /** 표 아래 — 한 값으로 나오는 것(N* · PVB · P · G) */
   scalars: CalcScalarRow[];
@@ -523,9 +547,27 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
     for (const name of missing) if (!out.missingRates.includes(name)) out.missingRates.push(name);
     // 지급자수 d 는 문서의 C 식에서 v^{t+½} 를 뺀 부분이다 — 표에서만 따로 보여 준다
     const { eqs } = parseLines(`${text}\n${bm.payout}`);
+    const meth = !spec.expenses.length || spec.expenses.some((e) => /^(α_S|α_P|β_S|β_G)$/.test(e.symbol));
     const sheet: CalcSheet = {
       id: b.id, name: b.name, group: bm.group.label, n, m: pay,
       ages: Array.from({ length: n + 1 }, (_, t) => contract.age + t),
+      // 계산에 앞서 정한 값 — 이것과 위험률만 값이고 나머지는 모두 식에서 나온다
+      inputs: [
+        { label: "가입나이 x", name: "x_age", value: contract.age, digits: 0, note: "세" },
+        { label: "성별", value: contract.sex === "F" ? "여" : "남" },
+        { label: "보장기간 n", name: "n_term", value: n, digits: 0, note: `년 — min(보험기간, ${b.endAge ?? 110}세 + 1 − 가입나이)` },
+        { label: "납입기간 m", name: "m_pay", value: pay, digits: 0, note: "년 — min(납입기간, n)" },
+        { label: "납입주기 k", name: "k_freq", value: contract.freq, digits: 0, note: "연 납입횟수" },
+        { label: "적용이율 i", name: "i_rate", value: spec.basis.interest ?? 0, digits: 6 },
+        { label: "현가율 v", name: "v_disc", value: scalar.v, digits: 10, formula: "v = 1 / ( 1 + i )" },
+        { label: "보장금액", name: "S_amt", value: b.amount ?? 0, digits: 0, note: "원" },
+        ...(b.waitDays ? [{ label: "면책", value: b.waitDays, digits: 0, note: `일 — 첫해 보험금 × ( 1 − ${waitMonths(b.waitDays)}/12 )` }] : []),
+        ...(meth
+          ? ([["α_S", "alphaS"], ["α_P", "alphaP"], ["β_S", "betaS"], ["β_G", "betaG"], ["β′", "betaPrime"], ["γ", "gamma"]] as const)
+            .map(([sym, name]) => ({ label: sym === "α_P" ? "α_P (적용값)" : sym, name, value: scalar[sym] ?? 0, digits: 8,
+              ...(sym === "α_P" && n < 20 ? { note: `보장기간이 20년보다 짧아 × ${n}/20` } : {}) }))
+          : ([["α", "alpha"], ["β", "beta"], ["γ", "gamma"]] as const).map(([sym, name]) => ({ label: sym, name, value: scalar[sym] ?? 0, digits: 8 }))),
+      ],
       cols: [], scalars: [], amount: b.amount, per100k: 0, premium: 0,
     };
     try {
@@ -536,8 +578,18 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
       for (const sym of [...rateSyms, ...(known.w ? ["w"] : [])]) {
         const r = sourceOf(sym);
         sheet.cols.push({
-          sym, label: label[sym] ?? sym, kind: "rate", digits: 8, values: known[sym] ?? [], parts: [],
+          sym, label: label[sym] ?? sym, kind: "rate", digits: 8, values: known[sym] ?? [], parts: [], offset: 0,
           formula: sym === "w" ? "조건 1.3. 적용해지율 — 납입기간 중" : `위험률 표에서 온 값${r?.source ? ` — ${r.source}` : ""}`,
+        });
+      }
+      // 현가율 — 위험률 바로 오른쪽. 값이 아니라 적용이율에서 나오는 식이다(D 는 v^t 를, C 는 v^{t+½} 를 쓴다)
+      for (const [sym, why] of [["v^t", "그 해 초의 현가율 — 유지자수·납입자수의 현가 D·D′ 에 쓴다"],
+        ["v^{t+½}", "그 해 가운데의 현가율 — 급부는 연도 중앙에 생긴다고 보아 C 에 쓴다"]] as const) {
+        const half = sym.includes("½") ? 0.5 : 0;
+        sheet.cols.push({
+          sym, label: "현가율", kind: "discount", digits: 10, offset: 0, parts: [],
+          formula: `${sym} = ( 1 / ( 1 + i ) )^{t${half ? "+½" : ""}} — ${why}`,
+          values: Array.from({ length: n + 1 }, (_, t) => scalar.v ** (t + half)),
         });
       }
       const names = [...COL_ORDER.filter((x) => mo.defs.has(x)), ...[...mo.defs.keys()].filter((x) => !COL_ORDER.includes(x) && isSeries(mo, x))];
@@ -546,11 +598,13 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
         const eq = d.direct ?? d.recur?.eq ?? [...d.points.values()][0];
         if (!eq) continue;
         const refs = refsOf(eq.expr).filter((r) => r.name !== "v" && (mo.known[r.name] || isSeries(mo, r.name)));
+        const off = d.recur?.off ?? 0;
         sheet.cols.push({
-          sym, label: label[sym] ?? sym, kind: "series", digits: DIGITS[sym] ?? 4, formula: eq.line,
+          sym, label: label[sym] ?? sym, kind: "series", digits: DIGITS[sym] ?? 4, formula: eq.line, eq, offset: off,
+          ...(off && d.points.has(0) ? { init: at(sym, 0) } : {}),
           values: Array.from({ length: n + 1 }, (_, t) => at(sym, t)),
           parts: Array.from({ length: n + 1 }, (_, t) => {
-            const base = d.recur && t >= d.recur.off ? t - d.recur.off : t;
+            const base = t >= off ? t - off : t;
             return refs.map((r) => {
               const i = r.idx ? Math.round(evalNode(r.idx, mo, { t: base, u: base }, new Map(), new Set())) : base;
               return { ref: `${r.name}${r.idx ? `(${contract.age + i})` : ""}`, value: at(r.name, i) };
@@ -562,7 +616,7 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
         const d = mo.defs.get(sym);
         if (!d) continue;
         const eq = d.scalar ?? d.direct;
-        sheet.scalars.push({ sym, label: label[sym] ?? sym, formula: eq?.line ?? "", value: valueOf(mo, sym), digits: sym === "N*" ? 2 : 8 });
+        sheet.scalars.push({ sym, label: label[sym] ?? sym, formula: eq?.line ?? "", value: valueOf(mo, sym), digits: sym === "N*" ? 2 : 8, eq });
       }
       sheet.per100k = Math.round(valueOf(mo, "G") * 1e5);
       sheet.premium = sheet.per100k * ((b.amount ?? 0) / 1e5);
