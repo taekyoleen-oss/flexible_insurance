@@ -231,6 +231,8 @@ export interface Model {
   /** 기호 값 — v · n · m · k · x · 사업비 */
   scalar: Record<string, number>;
   n: number;
+  /** 이미 센 값 (`이름@자리`) — 모델 하나가 한 번만 센다. 모델은 만든 뒤 바뀌지 않으므로 계속 써도 된다 */
+  cache?: Map<string, number>;
 }
 
 /** 식 목록 → 이름별 정의. 자리 식에 t 가 들어 있으면 그 오프셋으로 점화식·직접 정의를 가른다 */
@@ -334,10 +336,14 @@ function series(name: string, i: number, mo: Model, cache: Map<string, number>, 
 export const evalIndex = (node: Node, vars: Record<string, number>): number =>
   evalNode(node, { defs: new Map(), known: {}, scalar: vars, n: vars.n ?? 0 }, vars, new Map(), new Set(), true);
 
-/** 이름 하나의 값 — 자리를 주면 계열, 안 주면 스칼라 */
+/**
+ * 이름 하나의 값 — 자리를 주면 계열, 안 주면 스칼라.
+ * 캐시는 **모델에 둔다** — 되돌이 정의(`l_{x+t+1} = l_{x+t} × …`)라서 칸마다 새로 세면 한 열이 O(n²) 이 된다
+ * (계산 표는 담보마다 72줄 × 열 19개라 0.7초씩 멈췄다). `busy`(제 자리 되참조 막기)는 부를 때마다 새로 둔다.
+ */
 export function valueOf(mo: Model, name: string, i?: number): number {
-  const cache = new Map<string, number>(), busy = new Set<string>();
-  return i === undefined && mo.scalar[name] !== undefined ? mo.scalar[name] : series(name, i ?? 0, mo, cache, busy);
+  const cache = (mo.cache ??= new Map<string, number>());
+  return i === undefined && mo.scalar[name] !== undefined ? mo.scalar[name] : series(name, i ?? 0, mo, cache, new Set());
 }
 
 // ── 조건 → 계산 ─────────────────────────────────────────────────────────────
@@ -477,14 +483,18 @@ export interface CalcColumn {
   kind: "rate" | "discount" | "series";
   digits: number;
   values: number[];
-  /** 그 자리의 값이 어떤 값들로 나왔는지 (팝업) — 식에 나오는 기호와 그 값 */
-  parts: { ref: string; value: number }[][];
+  /** 그 자리의 값이 어떤 값들로 나왔는지 (칸을 눌렀을 때) — 식에 나오는 기호와 그 값.
+   *  미리 만들지 않는다 — 72줄 × 열 19개를 다 만들면 표 한 장이 그만큼 느려진다 */
+  parts: (t: number) => { ref: string; value: number }[];
   /** 읽어 둔 식 — 엑셀 수식으로 옮길 때 쓴다(위험률·현가율 열은 없다) */
   eq?: Equation;
   /** 점화식이면 앞자리를 몇 칸 쓰는지 (l_{x+t+1} = … → 1). 그 앞줄은 init */
   offset: number;
   init?: number;
 }
+/** 보일 것이 없는 열(위험률·현가율) */
+const NO_PARTS = () => [];
+
 export interface CalcScalarRow { sym: string; label: string; formula: string; value: number; digits: number; eq?: Equation }
 /** 계산에 앞서 정한 값 — 계약 한 점과 기초율. 이것과 위험률만 있으면 나머지는 식으로 나온다 */
 export interface CalcInput {
@@ -578,7 +588,7 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
       for (const sym of [...rateSyms, ...(known.w ? ["w"] : [])]) {
         const r = sourceOf(sym);
         sheet.cols.push({
-          sym, label: label[sym] ?? sym, kind: "rate", digits: 8, values: known[sym] ?? [], parts: [], offset: 0,
+          sym, label: label[sym] ?? sym, kind: "rate", digits: 8, values: known[sym] ?? [], parts: NO_PARTS, offset: 0,
           formula: sym === "w" ? "조건 1.3. 적용해지율 — 납입기간 중" : `위험률 표에서 온 값${r?.source ? ` — ${r.source}` : ""}`,
         });
       }
@@ -587,7 +597,7 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
         ["v^{t+½}", "그 해 가운데의 현가율 — 급부는 연도 중앙에 생긴다고 보아 C 에 쓴다"]] as const) {
         const half = sym.includes("½") ? 0.5 : 0;
         sheet.cols.push({
-          sym, label: "현가율", kind: "discount", digits: 10, offset: 0, parts: [],
+          sym, label: "현가율", kind: "discount", digits: 10, offset: 0, parts: NO_PARTS,
           formula: `${sym} = ( 1 / ( 1 + i ) )^{t${half ? "+½" : ""}} — ${why}`,
           values: Array.from({ length: n + 1 }, (_, t) => scalar.v ** (t + half)),
         });
@@ -603,13 +613,13 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
           sym, label: label[sym] ?? sym, kind: "series", digits: DIGITS[sym] ?? 4, formula: eq.line, eq, offset: off,
           ...(off && d.points.has(0) ? { init: at(sym, 0) } : {}),
           values: Array.from({ length: n + 1 }, (_, t) => at(sym, t)),
-          parts: Array.from({ length: n + 1 }, (_, t) => {
+          parts: (t: number) => {
             const base = t >= off ? t - off : t;
             return refs.map((r) => {
               const i = r.idx ? Math.round(evalNode(r.idx, mo, { t: base, u: base }, new Map(), new Set())) : base;
               return { ref: `${r.name}${r.idx ? `(${contract.age + i})` : ""}`, value: at(r.name, i) };
             });
-          }),
+          },
         });
       }
       for (const sym of ["N*", "PVB", "P", "P_base", "G"]) {
