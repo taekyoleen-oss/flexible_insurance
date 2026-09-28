@@ -136,7 +136,7 @@ describe("검증", () => {
 describe("되돌리기 (MethodSpec → 산출방법서)", () => {
   it("빈 스펙도 목차가 나온다", () => {
     const sections = renderMethodDoc(emptySpec("테스트 상품"));
-    expect(sections.map((s) => s.title)).toContain("1. 기초율에 관한 사항");
+    expect(sections.map((s) => s.title)).toContain("1. 보험료의 계산에 관한 사항");
     expect(docToMarkdown(sections, "제목")).toContain("# 제목");
   });
   it("읽은 문서를 그대로 다시 산출방법서로 낸다 (왕복)", async () => {

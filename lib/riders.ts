@@ -22,7 +22,7 @@ export const RIDER_FACTORS = {
 } as const;
 
 export const RIDER_RATE_NOTE: Record<RiderId, string> = {
-  cancerDx: "암발생률 (생명장기제2024-112호)",
+  cancerDx: "암발생률",
   cancerSurg: `암발생률 × ${RIDER_FACTORS.cancerSurg} (임시)`,
   cancerHosp: "암입원율 × 365일 (제공 자료)",
   stroke: `뇌출혈 발생률 (제공 자료, 0~${CI.meta.ages.stroke[1]}세)`,

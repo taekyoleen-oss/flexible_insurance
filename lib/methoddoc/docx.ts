@@ -177,7 +177,7 @@ function documentXml(sections: DocSection[], title: string, opt: DocxOptions): s
     body.push(para(run(sec.title), "Heading1"));
     for (const b of sec.blocks) {
       if (b.t === "p") body.push(b.kind === "label" ? para(richRuns(`${FORMULA_MARK} ${b.text}`), "FormulaLabel")
-        : para(richRuns(b.text), /^\d+\.\d+\.\s/.test(b.text) ? "Heading2" : undefined));
+        : para(richRuns(b.text), b.kind === "sub" || /^\d+\.\d+\.\s/.test(b.text) ? "Heading2" : undefined));
       else if (b.t === "note") body.push(para(richRuns(`${NOTE_MARK} ${b.text}`), "Note"));
       else if (b.t === "formula") for (const line of b.text.split("\n")) { if (line.trim()) body.push(...formulaParas(line)); }
       else body.push(table(b.head, b.rows));

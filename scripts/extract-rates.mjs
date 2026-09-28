@@ -45,13 +45,13 @@ function assertTerminal(t, name) {
   console.log("rates-kli7.json", out.M.q.length, "ages");
 }
 
-// 써미트 2014-59호 — 종신공제 워크북. 테스트 픽스처 전용(가정 세트로 등록하지 않음)
+// 경험생명표(가상) — 테스트 픽스처 전용(가정 세트로 등록하지 않음)
 {
   const wb = JSON.parse(readFileSync(SRC + "whole-life-multi.pygrid.json", "utf8"));
   const rows = sheetRows(wb, "위험률");
   const ages = col(rows, "나이");
   const set = (sx) => { const q = col(rows, `사망률_${sx}`), f = col(rows, `장해50_${sx}`); return { q, f, qStd: q, fStd: f }; };
-  const out = { meta: { name: "써미트 2014-59호 (테스트 전용)", source: "whole-life-multi.pygrid.json", ages: [ages[0], ages.at(-1)], terminal: { M: 110, F: 112 } }, M: set("남"), F: set("여") };
+  const out = { meta: { name: "경험생명표(가상) (테스트 전용)", source: "whole-life-multi.pygrid.json", ages: [ages[0], ages.at(-1)], terminal: { M: 110, F: 112 } }, M: set("남"), F: set("여") };
   assertTerminal(out, "summit");
   mkdirSync("tests/fixtures", { recursive: true });
   writeFileSync("tests/fixtures/rates-summit.json", JSON.stringify(out));

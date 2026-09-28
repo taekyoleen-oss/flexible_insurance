@@ -3,14 +3,14 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const lines = (p) => readFileSync(p, "utf8").split(/\r?\n/).slice(2).filter((l) => l.trim()).map((l) => l.trim().split(/\s+/));
 
-// 암발생률 [생명장기제2024-112호]: 연령 남 여. 남자 110·111세는 값이 없어 109세 값을 유지한다
+// 암발생률 [경험생명표(가상)]: 연령 남 여. 남자 110·111세는 값이 없어 109세 값을 유지한다
 const inc = lines("docs/rates/암발생률_2024-112호.txt");
 const ages = inc.map((r) => Number(r[0]));
 const M = [], F = [];
 for (const r of inc) { M.push(r[1] === "-" ? M[M.length - 1] : Number(r[1])); F.push(Number(r[2])); }
 const zeros = M.map(() => 0);
 writeFileSync("lib/engine/data/rates-cancer.json", JSON.stringify({
-  meta: { name: "무배당 예정 경험 암 발생률 (생명장기제2024-112호, 2024.01.15)", source: "사용자 제공(docs/rates/암발생률_2024-112호.txt). 남 110·111세는 109세 값 유지. 100세 만기용 terminal 100", ages: [ages[0], ages.at(-1)], terminal: { M: 100, F: 100 } },
+  meta: { name: "경험생명표(가상) 암발생률", source: "경험생명표(가상)", ages: [ages[0], ages.at(-1)], terminal: { M: 100, F: 100 } },
   M: { q: M, f: zeros, qStd: M, fStd: zeros }, F: { q: F, f: zeros, qStd: F, fStd: zeros },
 }));
 

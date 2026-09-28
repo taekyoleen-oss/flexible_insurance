@@ -21,7 +21,7 @@ describe.runIf(existsSync(SPEC))("Studio 기본 상품 → 이 앱의 계산", (
     expect(warnings).toEqual([]);
     const tab = activeTab(state);
     expect(tab.sheet.columns.map((c) => [c.name, c.kind, c.waiver])).toEqual([
-      ["제7회 경험생명표 사망률", "death", false], ["80% 이상 장해율", "incidence", true], ["암발생률", "incidence", true],
+      ["사망률", "death", false], ["80% 이상 장해율", "incidence", true], ["암발생률", "incidence", true],
     ]);
     expect(tab.coverages.map((c) => [c.label, c.kind, c.amount, c.endAge, c.waitMonths])).toEqual([
       ["사망·80% 이상 장해", "death", 1e8, 110, 0], ["암 진단", "incidence", 5e7, 100, 3],

@@ -29,7 +29,7 @@ export interface RateRef {
   id: string;
   name: string;
   role: RateRole;
-  /** "보험개발원 보험요율1 제2015-1151호(2015.03.20)" 같은 근거 문구 */
+  /** "경험생명표(가상) 사망률" 같은 근거 문구 — 저장소가 공개라 견본·샘플에는 실제 출처를 싣지 않는다 */
   source?: string;
   /** 계수·보정 설명 (예: "× 연령전환계수") */
   adjustment?: string;

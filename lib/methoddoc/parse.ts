@@ -320,12 +320,12 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       const v = cover(new RegExp(`^${k}$`));
       if (v) add(path, k, v[0], `${k} ${v[0]}`, `표 ${v[1] + 1}`, "high");
     }
-    // 1.4 의 문장이 납입면제 여부다 — 위험률 목록에 납입면제 계열이 있어도 쓰지 않을 수 있다
-    const w = paragraphs.find((p) => /(납입만 면제되어 더 준다|납입면제를 적용하나|별도의 납입면제율을 두지 않는다)/.test(p));
+    // 가.(4) 의 문장이 납입면제 여부다 — 위험률 목록에 납입면제 계열이 있어도 쓰지 않을 수 있다
+    const w = paragraphs.find((p) => /(납입면제 사유는|납입만 면제되어 더 준다|납입면제를 적용하나|별도의 납입면제율을 두지 않는다)/.test(p));
     if (w) {
       const i = evidence.findIndex((e) => e.path === "basis.waiver");
       if (i >= 0) evidence.splice(i, 1);
-      add("basis.waiver", "납입면제", !/두지 않는다/.test(w), w.slice(0, 120), "표준 양식 1.4", "high");
+      add("basis.waiver", "납입면제", !/두지 않는다/.test(w), w.slice(0, 120), "표준 양식 가.(4)", "high");
     }
     // (식 비교 전에 읽는다 — 자동 식이 납입면제 사유에 따라 달라진다)
     // 1.4 의 "f_x : A · B" — 납입면제 사유. 유형이 납입면제가 아닌 위험률(예: 암진단 담보의 암 발생률)은 basis.waiverRateIds 로 (담보별 식의 f 줄은 "—" 가 붙어 다르다)
@@ -334,7 +334,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       const ids = fx.trim().replace(/^f_x\s*:\s*/, "").split(/\s*·\s*/)
         .map((nm) => spec.rates.find((r) => r.name === nm.trim())).filter((r): r is RateRef => !!r && r.role !== "waiver").map((r) => r.id);
       spec.basis.waiverRateIds = ids.length ? ids : undefined;
-      add("basis.waiverRateIds", "납입면제 사유", ids.join(", ") || "없음", fx.slice(0, 120), "표준 양식 1.4", "high", false);
+      add("basis.waiverRateIds", "납입면제 사유", ids.join(", ") || "없음", fx.slice(0, 120), "표준 양식 가.(4)", "high", false);
     }
     readStandard(paragraphs, spec, evidence, format!);
   } else spec.sections = outlineSections(doc);
@@ -370,6 +370,8 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   type Kind = "known" | "reserve" | "surrender" | "other";
   type Read = FormulaSpec & { lines: string[] };
   const TOP = /^\d+\.\s*(\S.*)$/;
+  /** 절 안의 소제목 — "가. 예정기초율" (v4). 여기부터 나오는 식은 이 이름의 절로 둔다 */
+  const SUB = /^[가-하]\.\s*(\S.*)$/;
   const read: Read[] = [];
   const extras: ExtraSection[] = [], reserve: string[] = [], surrender: string[] = [];
   let kind: Kind = "known", title = "", extra: ExtraSection | null = null;
@@ -382,12 +384,15 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
     if (top) {
       flush();
       title = top[1].trim();
-      kind = /^(기초율에 관한 사항|계약 단위와 급부|기호의 정의)$|^별첨/.test(title) ? "known"
-        : /^책임준비금 관련 사항$/.test(title) ? "reserve" : /^해지환급금 관련 사항$/.test(title) ? "surrender" : "other";
+      kind = /^(기초율에 관한 사항|계약 단위와 급부|기호의 정의|보험료의 계산에 관한 사항)$|^별첨/.test(title) ? "known"
+        : /^책임준비금.*사항$/.test(title) ? "reserve" : /^해지환급금.*사항$/.test(title) ? "surrender" : "other";
       extra = kind === "other" ? { title, paragraphs: [] } : null;
       if (extra) extras.push(extra);
       continue;
     }
+    // 1장 안의 소제목이면 식의 절 이름만 바꾼다(장의 갈래 kind 는 그대로)
+    const sub = kind === "known" && t.length < 60 ? SUB.exec(t) : null;
+    if (sub) { flush(); title = sub[1].trim(); continue; }
     if (t.startsWith(FORMULA_MARK)) {
       flush();
       if (extra) { extras.splice(extras.indexOf(extra), 1); extra = null; }   // 식이 있는 절은 수식 절이다
@@ -425,12 +430,14 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   // 옛 판의 자동 식은 지금 판에서 나뉘거나 이름이 바뀌었다 — 그 제목은 건너뛰고(사람이 고친 것인지 알 수 없다), 사람이 더한 식만 둔다
   //  v1 → v2: 계산기수가 나뉘고 기호가 바뀌었다(mm → k, 발생률 k → r)
   //  v2 → v3: 계산기수가 "보험료의 현가"·"보험금의 현가" 로 나뉘고, 유지자수·납입자수는 담보가 아니라 집단마다 적는다
-  const v1 = /v1\s*$/.test(format), v2 = /v2\s*$/.test(format);
+  const v1 = /v1\s*$/.test(format), v2 = /v2\s*$/.test(format), v3 = /v3\s*$/.test(format);
   const V1_AUTO = /^(유지자수·납입자수 — |(계산기수|급부 현가와 납입기수|순보험료·기준연납순보험료|영업보험료|저해지·무해지환급형|연말 책임준비금|해약공제와 해지환급금|환급률)$)/;
   const V2_AUTO = /^(유지자수·납입자수 — |(유지자수의 현가 \(D\)|납입자수의 현가 \(D′\)|급부 발생자의 현가 \(C\)|유지자수 현가의 누계 \(N\)|납입자수 현가의 누계 \(N′\)|급부 현가 \(PVB\))$)/;
   spec.formulas = read.filter((f) => {
     if (v1 && V1_AUTO.test(f.label)) return false;
     if (v2 && V2_AUTO.test(f.label)) return false;
+    // v3 → v4 는 절 이름만 바뀌었다(제목은 그대로) — 절 이름을 지금 것으로 옮겨 자동 식과 맞춘다
+    if (v3) { const a0 = auto.find((x) => x.label === f.label); if (a0) f.section = a0.section; }
     const a = auto.find((x) => x.section === f.section && x.label === f.label);
     return !a || !same(a.text, f.lines.join("\n")) || !same(a.note, f.note);
   }).map(({ lines, ...f }) => ({ ...f, text: lines.join("\n") }));

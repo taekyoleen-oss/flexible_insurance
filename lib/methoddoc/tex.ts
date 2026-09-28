@@ -106,7 +106,7 @@ export function docToLatex(sections: DocSection[], title: string, today = new Da
     for (const b of sec.blocks) {
       if (b.t === "p") {
         L.push(b.kind === "label" ? `\\textbf{${escText(`${FORMULA_MARK} ${b.text}`)}}`
-          : /^\d+\.\d+\.\s/.test(b.text) ? `\\subsection*{${escText(b.text)}}` : escText(b.text), "");
+          : b.kind === "sub" || /^\d+\.\d+\.\s/.test(b.text) ? `\\subsection*{${escText(b.text)}}` : escText(b.text), "");
       } else if (b.t === "note") {
         L.push("\\begin{quote}\\small", escText(`${NOTE_MARK} ${b.text}`), "\\end{quote}", "");
       } else if (b.t === "formula") {

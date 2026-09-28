@@ -176,13 +176,13 @@ export interface RatePreset { id: string; label: string; kind: RateKind; waiver:
 
 /** 기존 산출에 쓰는 표를 열로 불러온다 — 설계형 상품과 같은 위험률로 일반 상품을 만들 수 있다 */
 export const RATE_PRESETS: RatePreset[] = [
-  { id: "kli7", label: "제7회 경험생명표 사망률 q", kind: "death", waiver: false, note: "설계형 종신보험과 같은 표", source: "보험개발원 제7회 경험생명표 사망률",
+  { id: "kli7", label: "제7회 경험생명표 사망률 q", kind: "death", waiver: false, note: "설계형 종신보험과 같은 표", source: "경험생명표(가상) 사망률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].q, a))) },
   { id: "kli7Std", label: "제7회 표준사망률 q_std", kind: "death", waiver: false, note: "표준책임준비금 기준", source: "제7회 경험생명표 기준 표준사망률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].qStd, a))) },
   { id: "waiver", label: "납입면제 발생률 f (장해 50% 이상)", kind: "other", waiver: true, note: "제7회 경험생명표. 납입면제 열로 들어갑니다", source: "제7회 경험생명표 50% 이상 장해 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].f, a))) },
-  { id: "cancer", label: "암발생률 (생명장기제2024-112호)", kind: "incidence", waiver: false, note: "제공받은 실제 값", source: "보험개발원 생명장기제2024-112호 무배당 예정 경험 암발생률",
+  { id: "cancer", label: "암발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값", source: "경험생명표(가상) 암발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a))) },
   { id: "cancerHosp", label: "암입원 연간 기대일수 (암입원율 × 365)", kind: "recurring", waiver: false, note: "제공받은 실제 값. 일당형 담보용",
     values: (s, ages) => ages.map((a) => roundRate(at(HOSP[s], a) * 365)) },
@@ -196,7 +196,7 @@ export const RATE_PRESETS: RatePreset[] = [
     values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
   // 종신보험은 "사망 또는 80% 이상 장해" 에 같은 보험금을 준다 — 사망률과 함께 탈퇴·급부 열로 쓴다
   { id: "dis80", label: "80% 이상 장해율 (재해 + 질병)", kind: "incidence", waiver: false,
-    note: "써미트 2014-59호 80%이상 재해장해 + 질병장해발생율 (MG 더블종신공제Ⅱ)",
+    note: "80%이상 재해장해율 + 질병장해율",
     values: (s, ages) => ages.map((a) => roundRate(at(DIS80[s], a))) },
   // 메리츠 「보험료납입지원 특별약관」 산출방법서의 지급사유 구성(고도후유장해 + 3대질병 진단)을 본떴다.
   // 그 방법서의 탈퇴율은 후유장해발생률(80%이상)·암·뇌졸중·급성심근경색증발생률의 합이다.

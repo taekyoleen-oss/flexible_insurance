@@ -35,7 +35,7 @@ describe("② Life_ins_Doc_Convert_Studio 의 MethodSpec JSON", () => {
     expect(warnings).toEqual([]);
     expect(state.productName).toBe("종신보험");
     const [tab] = state.tabs;
-    expect(tab.sheet.columns.map((c) => [c.name, c.kind, c.waiver])).toEqual([["제7회 경험생명표 사망률", "death", false], ["80% 이상 장해율", "incidence", false]]);
+    expect(tab.sheet.columns.map((c) => [c.name, c.kind, c.waiver])).toEqual([["사망률", "death", false], ["80% 이상 장해율", "incidence", false]]);
     expect([tab.sheet.ages[0], tab.sheet.ages[tab.sheet.ages.length - 1]]).toEqual([40, 110]);
     const c = tab.coverages[0];
     expect([c.label, c.kind, c.amount, c.endAge, c.exitColIds.length]).toEqual(["사망·80% 이상 장해", "death", 1e8, 110, 2]);
@@ -49,7 +49,7 @@ describe("② Life_ins_Doc_Convert_Studio 의 MethodSpec JSON", () => {
     spec.rates.push({ id: "kc", name: "암발생률", role: "incidence" });      // 아무 담보도 안 쓰는 표 없는 위험률
     const { state, warnings } = planFromSpec(spec);
     expect(state.tabs.map((t) => t.name)).toEqual(["주계약", "특약1"]);
-    expect(state.tabs[1].sheet.columns.map((c) => c.name)).toEqual(["제7회 경험생명표 사망률", "80% 이상 장해율"]);
+    expect(state.tabs[1].sheet.columns.map((c) => c.name)).toEqual(["사망률", "80% 이상 장해율"]);
     const rider = state.tabs[1].coverages[0];
     expect(rider.eventColId).toBe(state.tabs[1].sheet.columns[1].id);
     expect(warnings).toEqual([]);             // 특약이 여럿이면 쓰는 위험률만 옮겨서 표 없는 kc 는 경고도 없다
@@ -62,7 +62,7 @@ describe("② Life_ins_Doc_Convert_Studio 의 MethodSpec JSON", () => {
     spec.benefits[0].waitDays = 90;
     const { state, warnings } = planFromSpec(spec);
     expect(warnings.join("\n")).toMatch(/80% 이상 장해율.*값 표가 없어 0/);
-    expect(state.tabs[0].sheet.columns.map((c) => c.name)).toEqual(["제7회 경험생명표 사망률", "80% 이상 장해율"]);
+    expect(state.tabs[0].sheet.columns.map((c) => c.name)).toEqual(["사망률", "80% 이상 장해율"]);
     expect(state.tabs[0].sheet.columns[1].cells.every((x) => x === "0")).toBe(true);
     expect(state.tabs[0].coverages[0].waitMonths).toBe(3);
   });

@@ -22,7 +22,7 @@ function readCsv() {
 /** Studio 가 attachTables 로 붙이는 모양 그대로 */
 function studioSpec(): MethodSpec {
   const { col } = readCsv();
-  const q: RateRef = { id: "q", name: "제7회 경험생명표 사망률", role: "death", tables: { M: col("사망률(남)"), F: col("사망률(여)") }, table: { ...col("사망률(남)"), sex: "M" } };
+  const q: RateRef = { id: "q", name: "사망률", role: "death", tables: { M: col("사망률(남)"), F: col("사망률(여)") }, table: { ...col("사망률(남)"), sex: "M" } };
   const r2: RateRef = { id: "r2", name: "2대질병 발생률", role: "incidence", table: col("2대질병 발생률") };
   const rc: RateRef = { id: "rc", name: "암발생률", role: "incidence", tables: { M: col("암발생률(남)"), F: col("암발생률(여)") }, table: { ...col("암발생률(남)"), sex: "M" } };
   return {
@@ -52,7 +52,7 @@ describe.runIf(existsSync(CSV))("Studio 위험률 표 → MethodSpec → 이 앱
     const { state, warnings } = planFromSpec(spec);
     expect(warnings).toEqual([]);
     const tab = activeTab(state), at = (a: number) => tab.sheet.ages.indexOf(a);
-    expect(tab.sheet.columns.map((c) => [c.name, c.kind])).toEqual([["제7회 경험생명표 사망률", "death"], ["2대질병 발생률", "incidence"], ["암발생률", "incidence"]]);
+    expect(tab.sheet.columns.map((c) => [c.name, c.kind])).toEqual([["사망률", "death"], ["2대질병 발생률", "incidence"], ["암발생률", "incidence"]]);
     expect([tab.sheet.columns[0].cells[at(40)], tab.sheet.columns[1].cells[at(40)], tab.sheet.columns[2].cells[at(80)]]).toEqual(["0.00086", "0.0016", "0.031245"]);
     expect(tab.coverages[0].exitColIds).toEqual([tab.sheet.columns[0].id, tab.sheet.columns[1].id]);
     const p = evaluateProduct(state);

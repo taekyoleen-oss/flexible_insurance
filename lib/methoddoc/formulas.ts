@@ -4,11 +4,11 @@ import { waiverRates, type BenefitSpec, type FormulaSpec, type MethodSpec, type 
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
  *
  * 식은 산출 순서대로 묶는다 — 카드(조건 화면)와 절(산출방법서)이 같은 순서다.
- *   3. 탈퇴자·유지자·납입자   집단마다 l · l′   (탈퇴 사유가 같은 담보는 한 집단)
- *   4. 보험료의 현가          D · D′ · N · N′ · N*
- *   5. 보험금의 현가          담보마다 S · C · M · PVB
- *   6. 보험료의 계산          P · 기준연납순보험료 · G
- *   7~ 책임준비금 · 해지환급금
+ *   1장 라. 유지자수·납입자수     집단마다 l · l′   (탈퇴 사유가 같은 담보는 한 집단)
+ *   1장 마. 계산기수 — 보험료     D · D′ · N · N′ · N*
+ *   1장 바. 계산기수 — 보험금     담보마다 S · C · M · PVB
+ *   1장 사. 순보험료 및 영업보험료 P · 기준연납순보험료 · G
+ *   2·3장 책임준비금 · 해지환급금
  *
  * 규칙은 기존 산출방법서를 따른다.
  *  - 유지자수·납입자수는 "율"이 아니라 "~를 제외한 생존자수"로 적는다
@@ -38,7 +38,7 @@ function pairsOf(syms: string[]): string[] {
   return out;
 }
 
-/** 위험률 이름을 지급 사유 낱말로 — "제7회 경험생명표 사망률" → "사망", "80% 이상 장해율" → "80% 이상 장해" */
+/** 위험률 이름을 지급 사유 낱말로 — "사망률" → "사망", "80% 이상 장해율" → "80% 이상 장해" */
 export const reasonOf = (r: RateRef) => (r.role === "death" ? "사망" : r.name.replace(/\s*(발생)?[율률]\s*[a-zA-Z]?$/, ""));
 
 /** 사업비가 산출방법서형(α_S·α_P·β_S·β_G·β′·γ)인지 */
@@ -216,7 +216,7 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   // 3. 탈퇴자·유지자·납입자 — 집단마다
   for (const g of groups) {
     out.push({
-      section: "탈퇴자·유지자·납입자", key: `group:${g.id}`,
+      section: "유지자수·납입자수", key: `group:${g.id}`,
       // 이 집단의 담보 + 탈퇴 위험률 + (있으면) 납입면제·해지율 — 어느 조건을 골라도 이 식이 표시되게
       path: [...g.benefitIdx.map((i) => `benefits[${i}]`), ...g.exits.map(idx),
         ...(g.waivers.length ? ["basis.waiver", ...(spec.basis.waiverRateIds?.length ? ["basis.waiverRateIds"] : []), ...g.waivers.map((w) => idx(w.rate))] : []),
@@ -229,14 +229,14 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
 
   // 4. 보험료의 현가 · 6. 보험료의 계산 — 담보마다 같은 식
   for (const c of commonModels(spec)) {
-    out.push({ section: c.key.startsWith("pv") ? "보험료의 현가" : "보험료의 계산", key: c.key, label: c.label, path: c.path,
+    out.push({ section: c.key.startsWith("pv") ? "계산기수 — 보험료" : "순보험료 및 영업보험료", key: c.key, label: c.label, path: c.path,
       text: c.lines.join("\n"), ...(c.note ? { note: c.note } : {}) });
   }
 
   // 5. 보험금의 현가 — 담보마다
   for (const m of benefitModels(spec)) {
     out.push({
-      section: "보험금의 현가", key: `benefit:${m.b.id}`,
+      section: "계산기수 — 보험금", key: `benefit:${m.b.id}`,
       path: [`benefits[${m.idx}]`, ...(m.event && !m.group.syms.includes(m.event) ? [idx(m.event.rate)] : [])].join("|"),
       label: `보험금의 현가 — ${multi ? `${m.b.unit ? `${m.b.unit} ` : ""}${m.b.name}` : m.b.name}`,
       text: [...m.legend, ...(m.legend.length ? [""] : []), ...m.lines].join("\n"),
@@ -246,7 +246,7 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   }
 
   // 보험료의 계산에 딸린 것 — 저해지·무해지
-  if (low) out.push({ section: "보험료의 계산", key: "premium:low", label: "저해지·무해지환급형", path: "basis.lowRatio", text: [
+  if (low) out.push({ section: "순보험료 및 영업보험료", key: "premium:low", label: "저해지·무해지환급형", path: "basis.lowRatio", text: [
     "납입기간 중 해지하면 돌려주는 금액의 현가",
     "CSV_t = Σ_{u≥t} W_{x+u} · ρ · ( W^표준_u + W^표준_{u+1} ) / 2",
     "저해지·무해지환급형 순보험료",
@@ -259,21 +259,21 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   const ratio = spec.basis.lowRatio;
   const meth = isMethodExpenses(spec);
   out.push(
-    { section: "책임준비금의 계산", key: "reserve:P", label: "준비금 산출용 순보험료", path: "basis.standardInterest",
+    { section: "책임준비금의 계산에 관한 사항", key: "reserve:P", label: "준비금 산출용 순보험료", path: "basis.standardInterest",
       text: "P_β = ( PVB + CSV_0 + β′·( N_{x+m} − N_{x+n} ) ) / ( N′_x − N′_{x+m} )" },
-    { section: "책임준비금의 계산", key: "reserve:V", label: "연말 책임준비금", path: "basis.standardInterest", text:
+    { section: "책임준비금의 계산에 관한 사항", key: "reserve:V", label: "연말 책임준비금", path: "basis.standardInterest", text:
       "V_t = [ M_{x+t} + Σ_{u>t} E_u·D_{x+u} + CSV_t + β′·( N_{x+max(t,m)} − N_{x+n} ) − P_β·( N′_{x+t} − N′_{x+m} )·[t≤m] ] / D_{x+t}",
       note: "순보식에 납입 후 유지비 β′를 더한 형태. 표준준비금은 표준이율로 같은 식을 계산한다." },
-    { section: "해지환급금의 계산", key: "surrender:deduct", label: "해약공제", path: "surrender",
+    { section: "해지환급금의 계산에 관한 사항", key: "surrender:deduct", label: "해약공제", path: "surrender",
       text: `해약공제_t = α^공제 · max( min(m,${dy}) − t, 0 ) / min(m,${dy})` },
-    { section: "해지환급금의 계산", key: "surrender:alpha", label: "해약공제 기준 신계약비", path: "surrender",
+    { section: "해지환급금의 계산에 관한 사항", key: "surrender:alpha", label: "해약공제 기준 신계약비", path: "surrender",
       text: ["α^공제 = min( α, α^std )", ...(meth ? ["α = α_S + α_P · round₅( P_base )"] : [])].join("\n"),
       ...(meth ? { note: "영업보험료 G 에는 반올림 전 P_base 를 쓴다." } : {}) },
-    { section: "해지환급금의 계산", key: "surrender:W", label: "표준형 해지환급금", path: "surrender", text: "W^표준_t = max( V_t − 해약공제_t, 0 )" },
-    ...(low && ratio !== undefined ? [{ section: "해지환급금의 계산", key: "surrender:low", label: "저해지·무해지환급형 해지환급금", path: "surrender|basis.lowRatio",
+    { section: "해지환급금의 계산에 관한 사항", key: "surrender:W", label: "표준형 해지환급금", path: "surrender", text: "W^표준_t = max( V_t − 해약공제_t, 0 )" },
+    ...(low && ratio !== undefined ? [{ section: "해지환급금의 계산에 관한 사항", key: "surrender:low", label: "저해지·무해지환급형 해지환급금", path: "surrender|basis.lowRatio",
       text: ["납입기간 중", `W_t = ${Math.round(ratio * 100)}% × W^표준_t`, "납입 완료 후", "W_t = W^표준_t"].join("\n") }] : []),
-    { section: "해지환급금의 계산", key: "surrender:ratio", label: "환급률", path: "surrender", text: "환급률_t = W_t / 납입누계_t" },
-    { section: "해지환급금의 계산", key: "surrender:paid", label: "납입누계", path: "surrender", text: "납입누계_t = min(t, m) × k × G" },
+    { section: "해지환급금의 계산에 관한 사항", key: "surrender:ratio", label: "환급률", path: "surrender", text: "환급률_t = W_t / 납입누계_t" },
+    { section: "해지환급금의 계산에 관한 사항", key: "surrender:paid", label: "납입누계", path: "surrender", text: "납입누계_t = min(t, m) × k × G" },
   );
   return out;
 }
