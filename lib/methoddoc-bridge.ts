@@ -6,7 +6,7 @@ import { newColId, type RateColumn, type RateKind, type RateSheet } from "./plan
 import type { BenefitKind, Expenses, ExpensesMethod } from "./engine";
 import { planToSpec } from "./plan-doc";
 import { eventRate } from "./methoddoc/formulas";
-import { emptySpec, rateTable, type BenefitSpec, type BasisSpec, type ContractSpec, type Evidence, type ExpenseItem, type MethodSpec, type RateRef, type RateRole, type Sex } from "./methoddoc/spec";
+import { emptySpec, lastCoveredAge, rateTable, type BenefitSpec, type BasisSpec, type ContractSpec, type Evidence, type ExpenseItem, type MethodSpec, type RateRef, type RateRole, type Sex } from "./methoddoc/spec";
 
 /**
  * methoddoc 모듈(앱 독립) ↔ 이 앱의 저장소를 잇는 다리.
@@ -94,7 +94,7 @@ export function applySpecToPlan(spec: MethodSpec, accepted: Evidence[]): number 
 
   // 위험률 — 고른 계열 가운데 지금 탭 시트에 같은 이름의 열이 없는 것은 열로 더한다(값 표가 있으면 계약정보 성별의 값, 없으면 0 — 시트에 붙여넣는다).
   // 있는 열은 건드리지 않는다(시트에 붙여넣은 값이 더 정확하다)
-  // 이름 비교는 느슨하게 — "제7회 경험생명표 사망률 q"(이 앱의 프리셋) 와 "제7회 경험생명표 사망률"(산출방법서) 는 같은 계열
+  // 이름 비교는 느슨하게 — "사망률 q"(이 앱의 프리셋) 와 "경험생명표(가상) 사망률"(산출방법서) 는 같은 계열
   const key = (n: string) => n.replace(/\s+[A-Za-z]\d?$/, "").replace(/[\s()·_-]/g, "").toLowerCase();
   const same = (a: string, b: string) => { const x = key(a), y = key(b); return x === y || (x.length >= 2 && y.length >= 2 && (x.includes(y) || y.includes(x))); };
   const tabs = s.tabs.map((t) => {
@@ -238,7 +238,7 @@ export function planFromSpec(spec: MethodSpec): { state: PlanState; warnings: st
       const exits = (b.exitRateIds ?? []).map((x) => colOf.get(x)).filter((x): x is string => !!x);
       return {
         // 보장금액 = 가입금액 × 배수(Studio v5) — 가입금액이 없으면 1억 기준. 옛 문서는 절대 금액
-        id: fresh("c"), label: b.name, kind, amount: b.amount ?? (b.multiple !== undefined ? b.multiple * (spec.contract.sumAssured ?? 1e8) : 3e7), endAge: b.endAge ?? endDefault,
+        id: fresh("c"), label: b.name, kind, amount: b.amount ?? (b.multiple !== undefined ? b.multiple * (spec.contract.sumAssured ?? 1e8) : 3e7), endAge: b.endAge !== undefined ? lastCoveredAge(b.endAge) : endDefault,   // 산출방법서의 N세 만기 = 보장 종료 연령 N−1세
         waitMonths: b.waitDays ? Math.round(b.waitDays / 30.4) : 0,     // planToSpec 이 개월 × 30.4 로 낸다
         eventColId, exitColIds: exits.length ? exits : autoExitCols(sheet, kind, eventColId),
         steps: b.steps ?? [], points: b.points ?? [],

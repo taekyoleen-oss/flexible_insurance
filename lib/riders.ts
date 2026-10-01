@@ -7,7 +7,7 @@ import { assumptionOf, CANCER_TABLE, TABLE, type DesignState } from "./state";
 export const NON_DEATH_END_AGE = 100;
 
 /**
- * 특약 위험률. 암발생률(2024-112호)·암입원율·뇌출혈·급성심근경색증 발생률은 제공받은 실제 값이고,
+ * 특약 위험률. 암발생률·암입원율·뇌출혈·급성심근경색증 발생률은 공개 표(근거는 경험생명표(가상))이고,
  * 암수술·일반 입원만 회사 요율이 없어 계수를 곱한 임시값이다(계수를 바꾸거나 회사 위험률로 교체하면 된다).
  */
 export const CI = ciRates as { meta: { ages: { stroke: number[]; ami: number[] } }; stroke: { M: number[]; F: number[] }; ami: { M: number[]; F: number[] } };
@@ -40,13 +40,15 @@ export function riderPremiums(s: DesignState): RiderRow[] {
   const len = Math.max(q.length, inc.length);
   const at = (arr: number[], i: number) => arr[i] ?? arr[arr.length - 1] ?? 0;
   const vec = (f: (i: number) => number) => Array.from({ length: len }, (_, i) => f(i));
+  // 사망과 질병의 결합 — 겹치는 부분을 절반으로(산출방법서·상품 만들기와 같은 규칙)
+  const both = (a: number, b: number) => a + b - (a * b) / 2;
   const bases: Record<RiderId, { exit: number[]; event: number[]; wait: number }> = {
-    cancerDx: { exit: vec((i) => at(q, i) + at(inc, i)), event: vec((i) => at(inc, i)), wait: RIDER_FACTORS.cancerWait },
-    cancerSurg: { exit: vec((i) => at(q, i) + at(inc, i)), event: vec((i) => at(inc, i) * RIDER_FACTORS.cancerSurg), wait: RIDER_FACTORS.cancerWait },
+    cancerDx: { exit: vec((i) => both(at(q, i), at(inc, i))), event: vec((i) => at(inc, i)), wait: RIDER_FACTORS.cancerWait },
+    cancerSurg: { exit: vec((i) => both(at(q, i), at(inc, i))), event: vec((i) => at(inc, i) * RIDER_FACTORS.cancerSurg), wait: RIDER_FACTORS.cancerWait },
     cancerHosp: { exit: vec((i) => at(q, i)), event: vec((i) => at(hd, i) * RIDER_FACTORS.cancerHospDaysPerYear), wait: RIDER_FACTORS.cancerWait },   // 입원 급부는 반복 지급이라 사망으로만 소멸
     // 진단형: 탈퇴 = 사망 + 그 질병 발생(1회 지급 후 소멸)
-    stroke: { exit: vec((i) => at(q, i) + at(st, i)), event: vec((i) => at(st, i)), wait: 1 },
-    ami: { exit: vec((i) => at(q, i) + at(am, i)), event: vec((i) => at(am, i)), wait: 1 },
+    stroke: { exit: vec((i) => both(at(q, i), at(st, i))), event: vec((i) => at(st, i)), wait: 1 },
+    ami: { exit: vec((i) => both(at(q, i), at(am, i))), event: vec((i) => at(am, i)), wait: 1 },
     hosp: { exit: vec((i) => at(q, i)), event: vec((i) => Math.min(RIDER_FACTORS.hospDaysCap, RIDER_FACTORS.hospDaysBase + RIDER_FACTORS.hospDaysSlope * at(q, i))), wait: 1 },
   };
   return RIDERS.map((d) => {
@@ -54,7 +56,8 @@ export function riderPremiums(s: DesignState): RiderRow[] {
     const b = bases[d.id];
     const k = riderCommutation({ interest: a.interest, exit: b.exit, event: b.event }, p.age, n);
     const pr = riderPremium(k, p.age, m, 12, a.expenses, b.wait);
-    const per100k = Math.round(pr.gross * 1e5);            // 기준금액 10만원당 월 보험료(원)
+    // 기준금액 10만원당 월 보험료(원) — 주계약(compute.ts·plan.ts)과 같이 1원당을 소수 여섯째 자리까지 반올림한 뒤 10만원당으로
+    const per100k = Math.round(Math.round(pr.gross * 1e6) / 1e6 * 1e5);
     const monthly = per100k * (r.amount / 1e5);
     return { id: d.id, label: d.label, kind: d.kind, unitLabel: d.unitLabel, on: r.on, amount: r.amount, monthly, per100k, termYears: n, payYears: m, exit: b.exit, event: b.event, wait: b.wait, note: RIDER_RATE_NOTE[d.id] };
   });

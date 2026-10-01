@@ -82,6 +82,8 @@ const fmt = (v: number) => (Number.isInteger(v) ? String(v) : String(v));
 /** 계열 정의 한 줄 → 파이썬 줄들 (주석 = 산출방법서의 식) */
 function seriesLines(col: CalcSheet["cols"][number], c: Ctx): string[] {
   const nm = pyName(col.sym);
+  // 저해지형의 해지급부 현가 — 앱이 0 으로 두므로(표준형 보험료·준비금) 식을 옮기지 않는다
+  if (col.sym === "CSV") return [`# ${col.formula}`, `${nm} = [0.0] * (n + 1)   # 이 앱은 0 으로 둔다 — 저해지 해지급부의 값은 자유설계보험이 낸다`];
   if (!col.eq) return [`${nm} = ${JSON.stringify(col.values)}   # ${col.formula}`];
   const expr = toPython(col.eq.expr, c);
   if (col.offset) {
@@ -98,12 +100,38 @@ function scalarLines(sc: CalcSheet["scalars"][number], c: Ctx): string[] {
   return [`# ${sc.formula}`, `${nm} = ${toPython(sc.eq.expr, c)}`];
 }
 
+/** 식이 가리키는 이름들 */
+function refsOf(node: Node, out = new Set<string>()): Set<string> {
+  if (node.t === "ref") { out.add(node.name); if (node.idx) refsOf(node.idx, out); }
+  else if (node.t === "bin") { refsOf(node.a, out); refsOf(node.b, out); }
+  else if (node.t === "neg") refsOf(node.a, out);
+  else if (node.t === "call") node.args.forEach((x) => refsOf(x, out));
+  else if (node.t === "sum") { refsOf(node.from, out); refsOf(node.to, out); refsOf(node.body, out); }
+  return out;
+}
+type Col = CalcSheet["cols"][number];
+const refsOfCol = (col: Col) => (col.eq ? refsOf(col.eq.expr) : new Set<string>());
+/** 앞의 계열을 쓰는 계열이 뒤에 오게 — 사용자가 더한 식(F · R …)도 쓰이기 전에 정의된다 */
+function inOrder(cols: Col[]): Col[] {
+  const out: Col[] = [], left = [...cols];
+  while (left.length) {
+    const i = left.findIndex((c) => [...refsOfCol(c)].every((r) => r === c.sym || !left.some((x) => x.sym === r)));
+    out.push(...left.splice(i < 0 ? 0 : i, 1));
+  }
+  return out;
+}
+
 /** 담보 하나의 셀들 */
 function benefitCells(s: CalcSheet, bi: number): PyCell[] {
   const c: Ctx = { series: new Set(s.cols.map((x) => x.sym)), scalars: new Set(s.scalars.map((x) => x.sym)), known: new Set() };
   const pick = (syms: string[]) => syms.map((sym) => s.cols.find((x) => x.sym === sym)).filter((x): x is CalcSheet["cols"][number] => !!x);
   const rest = s.cols.filter((x) => x.kind === "series" && ![...PEOPLE, ...PV, ...BEN, ...RESERVE].includes(x.sym));
-  const rates = s.cols.filter((x) => x.kind === "rate");
+  // 유지자수·납입자수 단계가 쓰는 덧붙은 계열(납입자수의 F · 급부 발생률 R …)은 그 단계로 당겨 온다
+  const early = new Set<string>();
+  const pull = (col: Col) => { for (const r of refsOfCol(col)) { const x = rest.find((y) => y.sym === r); if (x && !early.has(r)) { early.add(r); pull(x); } } };
+  pick(PEOPLE).forEach(pull);
+  // 적용해지율 w 는 위험률 표가 아니라 조건(basis.lapse)에서 온다 — 아래 유지자수 단계에서 값으로 둔다
+  const rates = s.cols.filter((x) => x.kind === "rate" && x.sym !== "w");
   const input = (name: string) => s.inputs.find((x) => x.name === name);
   const tag = `담보 ${bi + 1}. ${s.name}`;
   const rateName = (sym: string) => s.cols.find((x) => x.sym === sym)?.label ?? sym;
@@ -131,14 +159,14 @@ function benefitCells(s: CalcSheet, bi: number): PyCell[] {
   const peopleCode = [
     `# ── 유지자수 l 과 납입자수 l′ — 기준 인원 100,000 에서 탈퇴 사유(와 납입면제 사유)가 생긴 만큼 줄인다 ──`,
     ...(w ? [`w = ${JSON.stringify(w.values)}   # 적용해지율 (납입기간 중)`] : []),
-    ...pick(PEOPLE).flatMap((col) => [...seriesLines(col, c), ""]),
+    ...inOrder([...rest.filter((x) => early.has(x.sym)), ...pick(PEOPLE)]).flatMap((col) => [...seriesLines(col, c), ""]),
     `print("t, l, l′, d (처음 5줄)")`,
     `for t in range(5): print(t, round(l[t], 2), round(lp[t], 2), round(d[t], 4))`,
   ];
   cells.push({ title: `${tag} — 유지자수·납입자수`, code: peopleCode.join("\n") });
   cells.push({ title: `${tag} — 현가·누계와 보험금의 현가`, code: [
     `# ── 현가 D·D′ 와 누계 N·N′ (계산기수), 보장금액의 배수 S · 급부 현가 C · 누계 M ──`,
-    ...pick([...PV, ...BEN, ...rest.map((x) => x.sym)]).flatMap((col) => [...seriesLines(col, c), ""]),
+    ...inOrder(pick([...PV, ...BEN, ...rest.filter((x) => !early.has(x.sym)).map((x) => x.sym)])).flatMap((col) => [...seriesLines(col, c), ""]),
     `print(f"D[0]={D[0]:,.4f}  N[0]={N[0]:,.2f}  N′[0]={Np[0]:,.2f}  M[0]={M[0]:,.4f}")`,
   ].join("\n") });
   cells.push({ title: `${tag} — 보험료`, code: [

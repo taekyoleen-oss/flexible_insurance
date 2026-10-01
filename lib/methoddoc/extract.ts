@@ -91,7 +91,10 @@ export function wordMath(xml: string): string {
     .replace(/<m:dPr>[\s\S]*?<\/m:dPr>/g, "")
     .replace(/<m:sub>/g, "_{").replace(/<\/m:sub>/g, "}").replace(/<m:sup>/g, "^{").replace(/<\/m:sup>/g, "}")
     .replace(/<m:num>/g, "(").replace(/<\/m:num>/g, ")/").replace(/<m:den>/g, "(").replace(/<\/m:den>/g, ")")
-    .replace(/<m:d>/g, "(").replace(/<\/m:d>/g, ")");
+    .replace(/<m:d>/g, "(").replace(/<\/m:d>/g, ")")
+    // 아래·위첨자를 함께 단 수식은 _{자리}^{…} 순서로 나온다 — 이름 위첨자((1)·한글)는 이 모듈 표기처럼 앞으로: r^{(1)}_{x+t}
+    .replace(/_\{((?:[^{}<]|<[^>]*>)*)\}\^\{((?:[^{}<]|<[^>]*>)*)\}/g, (all, sub: string, sup: string) =>
+      (/[(가-힣]/.test(sup.replace(/<[^>]*>/g, "")) ? `^{${sup}}_{${sub}}` : all));
   return s;
 }
 

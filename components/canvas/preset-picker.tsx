@@ -59,7 +59,7 @@ function InputButton({ id, children, dlgRef }: { id: PresetId; children: ReactNo
   const assumptions: Partial<Record<PresetId, ReactNode>> = {
     child: <>가정: 생활비 비율 {a.livingRatio * 100}% · 자녀 1인 {won(a.educationPerChild)} · 독립 {a.independenceAge}세 · 정리자금 {won(a.finalExpense)} · 할인율 {a.discount * 100}% (<Link href="/settings" className="underline">설정</Link>)</>,
     debt: <>가정: 정리자금 {won(a.finalExpense)} (<Link href="/settings" className="underline">설정</Link>)</>,
-    retire: <>가정: 정리자금 {won(a.finalExpense)} · 할인율 {a.discount * 100}% · 기대여명은 제7회 경험생명표 (<Link href="/settings" className="underline">설정</Link>)</>,
+    retire: <>가정: 정리자금 {won(a.finalExpense)} · 할인율 {a.discount * 100}% · 기대여명은 경험생명표(가상) (<Link href="/settings" className="underline">설정</Link>)</>,
     group: "필요액은 평준형(니즈) 입력과 같은 공통 값으로 계산합니다",
     estate: "상속세: 일괄공제 5억 · 배우자공제 max(5억, min(법정지분, 30억)) · 세율 10~50% (2024년 근사)",
   };

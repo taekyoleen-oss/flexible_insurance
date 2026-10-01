@@ -128,7 +128,8 @@ export function docToLatex(sections: DocSection[], title: string, today = new Da
 
 // ── .tex → 문단·표 ─────────────────────────────────────────────────────────
 const MATH_BACK: [RegExp, string][] = [
-  [/\\cdot\s?/g, "·"], [/\\times\s?/g, "×"], [/\\div\s?/g, "÷"], [/\\geq?\b\s?/g, "≥"], [/\\leq?q?\b\s?/g, "≤"], [/\\sum/g, "Σ"],
+  // × 는 늘 "× (" 처럼 띄어 쓴다(· 은 "q·r" 처럼 붙여 쓴다) — 되읽은 식이 글자까지 같게
+  [/\\cdot\s?/g, "·"], [/\\times\s?/g, "× "], [/\\div\s?/g, "÷"], [/\\geq?\b\s?/g, "≥"], [/\\leq?q?\b\s?/g, "≤"], [/\\sum/g, "Σ"],
   [/\\tfrac\{1\}\{2\}/g, "½"], [/\\oplus\s?/g, "⊕"], [/\\to\b\s?/g, "→"], [/\\ldots\s?/g, "…"],
   [/\\alpha\s?/g, "α"], [/\\beta\s?/g, "β"], [/\\gamma\s?/g, "γ"], [/\\delta\s?/g, "δ"], [/\\theta\s?/g, "θ"], [/\\pi\s?/g, "π"], [/\\omega\s?/g, "ω"],
   [/\\bar\{A\}/g, "Ā"], [/\\min/g, "min"], [/\\max/g, "max"], [/\\operatorname\{([^}]*)\}/g, "$1"], [/\\mathrm\{([^}]*)\}/g, "$1"],
@@ -140,6 +141,8 @@ export function unTexMath(s: string): string {
   let t = s;
   for (let k = 0; k < 3; k++) t = t.replace(/\{\\text\{([^{}]*)\}\}/g, "$1").replace(/\\text\{([^{}]*)\}/g, "$1");
   for (const [re, to] of MATH_BACK) t = t.replace(re, to);
+  // 첨자 안의 - 는 늘 빼기다 — Σ_{u=t}^{n-1} · v^{m-t-½} (낱말 속 하이픈을 지키는 아래 규칙은 글자 뒤 - 를 그대로 두므로)
+  t = t.replace(/([_^])\{([^{}]*)\}/g, (_, c: string, inner: string) => `${c}{${inner.replace(/-/g, "−")}}`);
   return t.replace(/'/g, "′").replace(/(?<![A-Za-z])-(?!-)/g, "−").replace(/&/g, "").replace(/\\([%#$&_{}])/g, "$1").replace(/\s+/g, " ").trim();
 }
 

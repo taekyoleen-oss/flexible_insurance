@@ -83,24 +83,28 @@ export function toAgeArray(ages: number[], values: number[]): number[] {
 }
 
 /**
- * 여러 탈퇴 사유를 하나의 탈퇴율로 묶는다. 산출방법서의 잔존 식을 그대로 따른다:
- *   사유 하나      1 − q
- *   사유 둘        1 − q − k + q·k/2
- *   사유 셋 이상   1 − Σd + Σ_{i<j} dᵢ·dⱼ / 2
- * 돌려주는 값은 탈퇴율(= 1 − 잔존율)이며 1 을 넘지 않는다(사망률이 1 인 나이).
+ * 탈퇴율 결합 — 산출방법서(Studio lib/methoddoc/formulas.ts)와 같은 규칙.
+ *  질병(사망 아닌 사유)끼리는 따로 생긴다고 보고 곱으로 R = 1 − Π(1 − rᵢ),
+ *  사망과는 겹치는 부분을 절반으로 Q = min(1, q + R − q·R/2). 사망이 없으면(사망 시 책임준비금 지급) Q = R.
+ *  하나뿐이면 그 값 그대로(1 − (1 − r) 의 끝자리 오차를 들이지 않는다 — 산출방법서 식과 끝자리까지 같게).
  */
-export function combineDecrements(arrs: number[][]): number[] {
-  const len = Math.max(0, ...arrs.map((a) => a.length));
+export function combineDecrements(deaths: number[][], ills: number[][] = []): number[] {
+  const len = Math.max(0, ...deaths.map((a) => a.length), ...ills.map((a) => a.length));
+  const one = (arrs: number[][], i: number) => (arrs.length === 1 ? arrs[0][i] ?? 0 : 1 - arrs.reduce((s, a) => s * (1 - (a[i] ?? 0)), 1));
   return Array.from({ length: len }, (_, i) => {
-    let sum = 0, sq = 0;
-    for (const a of arrs) { const d = a[i] ?? 0; sum += d; sq += d * d; }
-    return Math.min(1, sum - (sum * sum - sq) / 4);      // Σ_{i<j} dᵢdⱼ = (Σ² − Σd²)/2
+    if (!deaths.length) return Math.min(1, one(ills, i));
+    if (!ills.length) return Math.min(1, one(deaths, i));
+    const q = one(deaths, i), r = one(ills, i);
+    return Math.min(1, q + r - (q * r) / 2);
   });
 }
 
-/** 여러 열을 탈퇴율로 묶은 연령 인덱스 배열 */
-export const combineColumns = (s: RateSheet, r: ResolvedSheet, ids: string[]) =>
-  combineDecrements(ids.filter((id) => r.byId[id]).map((id) => toAgeArray(s.ages, r.byId[id])));
+/** 여러 열을 탈퇴율로 묶은 연령 인덱스 배열 — 열의 유형이 사망인 것과 아닌 것을 가른다 */
+export const combineColumns = (s: RateSheet, r: ResolvedSheet, ids: string[]) => {
+  const have = ids.filter((id) => r.byId[id]), arr = (id: string) => toAgeArray(s.ages, r.byId[id]);
+  const isDeath = (id: string) => s.columns.find((c) => c.id === id)?.kind === "death";
+  return combineDecrements(have.filter(isDeath).map(arr), have.filter((id) => !isDeath(id)).map(arr));
+};
 
 /** 한 열의 연령 인덱스 배열 */
 export const columnArray = (s: RateSheet, r: ResolvedSheet, id: string) =>
@@ -176,32 +180,32 @@ export interface RatePreset { id: string; label: string; kind: RateKind; waiver:
 
 /** 기존 산출에 쓰는 표를 열로 불러온다 — 설계형 상품과 같은 위험률로 일반 상품을 만들 수 있다 */
 export const RATE_PRESETS: RatePreset[] = [
-  { id: "kli7", label: "제7회 경험생명표 사망률 q", kind: "death", waiver: false, note: "설계형 종신보험과 같은 표", source: "경험생명표(가상) 사망률",
+  { id: "kli7", label: "사망률 q", kind: "death", waiver: false, note: "설계형 종신보험과 같은 표", source: "경험생명표(가상) 사망률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].q, a))) },
-  { id: "kli7Std", label: "제7회 표준사망률 q_std", kind: "death", waiver: false, note: "표준책임준비금 기준", source: "제7회 경험생명표 기준 표준사망률",
+  { id: "kli7Std", label: "표준사망률 q_std", kind: "death", waiver: false, note: "표준책임준비금 기준", source: "경험생명표(가상) 표준사망률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].qStd, a))) },
-  { id: "waiver", label: "납입면제 발생률 f (장해 50% 이상)", kind: "other", waiver: true, note: "제7회 경험생명표. 납입면제 열로 들어갑니다", source: "제7회 경험생명표 50% 이상 장해 발생률",
+  { id: "waiver", label: "납입면제 발생률 f (장해 50% 이상)", kind: "other", waiver: true, note: "납입면제 열로 들어갑니다", source: "경험생명표(가상) 50% 이상 장해 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(TABLE[s].f, a))) },
   { id: "cancer", label: "암발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값", source: "경험생명표(가상) 암발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a))) },
-  { id: "cancerHosp", label: "암입원 연간 기대일수 (암입원율 × 365)", kind: "recurring", waiver: false, note: "제공받은 실제 값. 일당형 담보용",
+  { id: "cancerHosp", label: "암입원 연간 기대일수 (암입원율 × 365)", kind: "recurring", waiver: false, note: "일당형 담보용", source: "경험생명표(가상) 암입원율 × 365일",
     values: (s, ages) => ages.map((a) => roundRate(at(HOSP[s], a) * 365)) },
-  { id: "stroke", label: "뇌출혈 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~84세, 그 뒤는 84세 값 유지)", source: "무배당 예정 뇌출혈 발생률 (제공 자료, 0~84세)",
+  { id: "stroke", label: "뇌출혈 발생률", kind: "incidence", waiver: false, note: "0~84세, 그 뒤는 84세 값 유지", source: "경험생명표(가상) 뇌출혈 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(CI.stroke[s], a))) },
-  { id: "ami", label: "급성심근경색증 발생률", kind: "incidence", waiver: false, note: "제공받은 실제 값 (0~79세, 그 뒤는 79세 값 유지)", source: "무배당 예정 급성심근경색증 발생률 (제공 자료, 0~79세)",
+  { id: "ami", label: "급성심근경색증 발생률", kind: "incidence", waiver: false, note: "0~79세, 그 뒤는 79세 값 유지", source: "경험생명표(가상) 급성심근경색증 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(CI.ami[s], a))) },
-  { id: "twoMajor", label: "2대질병 발생률 (뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "제공받은 두 발생률의 합",
+  { id: "twoMajor", label: "2대질병 발생률 (뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "두 발생률의 합", source: "경험생명표(가상) 뇌출혈 + 급성심근경색증 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(CI.stroke[s], a) + at(CI.ami[s], a))) },
-  { id: "threeMajor", label: "3대질병 발생률 (암 + 뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "제공받은 세 발생률의 합",
+  { id: "threeMajor", label: "3대질병 발생률 (암 + 뇌출혈 + 급성심근경색증)", kind: "incidence", waiver: false, note: "세 발생률의 합", source: "경험생명표(가상) 암 + 뇌출혈 + 급성심근경색증 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
   // 종신보험은 "사망 또는 80% 이상 장해" 에 같은 보험금을 준다 — 사망률과 함께 탈퇴·급부 열로 쓴다
   { id: "dis80", label: "80% 이상 장해율 (재해 + 질병)", kind: "incidence", waiver: false,
-    note: "80%이상 재해장해율 + 질병장해율",
+    note: "80%이상 재해장해율 + 질병장해율", source: "경험생명표(가상) 80%이상 재해장해율 + 질병장해율",
     values: (s, ages) => ages.map((a) => roundRate(at(DIS80[s], a))) },
-  // 메리츠 「보험료납입지원 특별약관」 산출방법서의 지급사유 구성(고도후유장해 + 3대질병 진단)을 본떴다.
+  // 실무 「보험료납입지원 특별약관」 산출방법서의 지급사유 구성(고도후유장해 + 3대질병 진단)을 본떴다.
   // 그 방법서의 탈퇴율은 후유장해발생률(80%이상)·암·뇌졸중·급성심근경색증발생률의 합이다.
   { id: "waiverSupport", label: "납입면제 사유 (고도후유장해 + 3대질병)", kind: "other", waiver: true,
-    note: "메리츠 보험료납입지원 특약 구성. 80% 이상 장해 + 암 + 뇌출혈 + 급성심근경색증",
+    note: "보험료납입지원 특약 구성. 80% 이상 장해 + 암 + 뇌출혈 + 급성심근경색증", source: "경험생명표(가상) 80%이상 장해 + 암 + 뇌출혈 + 급성심근경색증 발생률",
     values: (s, ages) => ages.map((a) => roundRate(at(DIS80[s], a) + at(CANCER[s].q, a) + at(CI.stroke[s], a) + at(CI.ami[s], a))) },
   { id: "blank", label: "빈 열 (직접 입력·수식)", kind: "other", waiver: false, note: "0으로 채우고 셀에 값이나 수식을 넣습니다",
     values: (_s, ages) => ages.map(() => 0) },

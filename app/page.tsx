@@ -22,7 +22,7 @@ export default function Home() {
         <h2 className="mb-3 font-display text-xl text-navy">상품을 고르고 새 설계를 시작합니다</h2>
         <div className="grid gap-4 md:grid-cols-2">
           {([
-            ["whole", "종신보험", "사망보험금을 연령별로 설계합니다. 종신 보장, 제7회 경험생명표·납입면제 이중탈퇴, 저해지환급형(납입기간 중 환급금 70%·해지율 3%) 선택.", "기준 사망보험금 1억"],
+            ["whole", "종신보험", "사망보험금을 연령별로 설계합니다. 종신 보장, 경험생명표(가상)·납입면제 이중탈퇴, 저해지환급형(납입기간 중 환급금 70%·해지율 3%) 선택.", "기준 사망보험금 1억"],
             ["cancer", "암보험", "암진단보험금을 연령별로 설계합니다. 100세 만기, 암발생률 기준 산출, 사망 시에는 책임준비금을 지급합니다(90일 면책은 첫해 급부 3/4로 반영). 무해지환급형(납입기간 중 환급금 없음·해지율 3%) 선택.", "기준 암진단보험금 1억"],
           ] as const).map(([id, name, desc, base]) => (
             <Card key={id} className="flex flex-col" title={<span className="flex items-center justify-between gap-2">{name}<span className="rounded bg-navy/5 px-2 py-0.5 font-sans text-xs font-normal text-navy/70">{base}</span></span>}>
@@ -41,7 +41,7 @@ export default function Home() {
             산출방법서와 같은 순서로 보험료·책임준비금·해약환급금이 나오고, 연령 구간별 배수로 보험금을 증액·감액할 수 있습니다.
           </p>
           <p className="mb-3 mt-1 text-xs text-navy/50">
-            위험률은 셀 직접 입력 · Excel 붙여넣기 · CSV/XLSX 업로드 · 기존 표(제7회 경험생명표·암발생률·암입원율) 불러오기로 넣습니다.
+            위험률은 셀 직접 입력 · Excel 붙여넣기 · CSV/XLSX 업로드 · 기존 표(경험생명표(가상)·암발생률·암입원율) 불러오기로 넣습니다.
             2대질병 진단, 정기·종신 사망, 암 진단 + 입원일당, 만기환급형, 무해지환급형 예시를 바로 열 수 있습니다.
           </p>
           <Button primary className="self-start" onClick={() => router.push("/builder")}>상품 만들기 열기</Button>

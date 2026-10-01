@@ -34,7 +34,8 @@ export function commutation(basis: Basis, age: number, n: number): Commutation {
     const q = basis.q[age + t] ?? 0, f = basis.f[age + t] ?? 0, w = wAt(t);
     // 사용자가 넣은 위험률이 1을 넘어도 생존자가 음수로 가지 않게 막는다
     lx[t + 1] = lx[t] * Math.max(0, 1 - q - w + (q * w) / 2);
-    lxp[t + 1] = lxp[t] * Math.max(0, 1 - q - f - w + (q * f + q * w + f * w) / 2);
+    const p = basis.p?.[age + t];
+    lxp[t + 1] = lxp[t] * Math.max(0, p !== undefined ? 1 - p - w + (p * w) / 2 : 1 - q - f - w + (q * f + q * w + f * w) / 2);
   }
   const Dx = new Array<number>(len), Dpx = new Array<number>(len), Cx = new Array<number>(len), Wx = new Array<number>(len);
   for (let t = 0; t < len; t++) {

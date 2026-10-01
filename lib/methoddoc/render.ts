@@ -1,5 +1,5 @@
-import { amountLabel, eventRate, groupModels, waitLabel } from "./formulas";
-import { hasContract, hasProduct, RATE_ROLE_LABEL, waiverRates, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
+import { amountLabel, eventCauses, eventRate, groupModels, waitLabel } from "./formulas";
+import { endAgeLabel, hasContract, hasProduct, RATE_ROLE_LABEL, waiverRates, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
  * MethodSpec → 산출방법서. 앱에 딸리지 않는다(import 는 spec 하나뿐).
@@ -228,7 +228,9 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     basisBlocks.push({ t: "formula", path: "basis.waiver|basis.waiverRateIds", text: [
       `f_x : ${wr.map((r) => r.name).join(" · ")}`,
       `f_{x+t} : 그 집단에서 납입만 면제되는 사유의 발생률 — 위 사유 가운데 그 집단의 탈퇴 사유가 아닌 것`,
-      ...(wr.length > 1 ? ["f_{x+t} = Σ 해당 사유의 발생률 − Σ_{i<j} 두 사유의 곱/2"] : []),
+      // 결합 규칙 — 질병끼리는 곱, 사망과는 겹치는 부분을 절반(라. 의 납입자수 식)
+      "F_{x+t} = 1 − ( 1 − r_{x+t} )·( 1 − f_{x+t} )… — 그 집단의 탈퇴 질병과 납입면제 사유를 함께, 따로 생긴다고 보고 곱으로",
+      "Q′_{x+t} = q_{x+t} + F_{x+t} − q_{x+t}·F_{x+t}/2 — 사망과는 겹치는 부분을 절반으로",
     ].join("\n") });
   } else {
     basisBlocks.push({ t: "p", path: "basis.waiver", text: spec.basis.waiver
@@ -264,11 +266,11 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       ["급부 유형", RATE_ROLE_LABEL[b.role]],
       // 지급 사유는 담보 이름과 겹치기 쉬워 따로 적었을 때만 싣는다
       ...(b.trigger ? [["지급 사유", b.trigger] as [string, string]] : []),
-      ["보험기간", b.endAge ? `${b.endAge}세${b.endAge >= 110 ? " (종신)" : ""}` : "—"],
+      ["보험기간", endAgeLabel(b.endAge)],
       ["보장금액", amountLabel(b)],
       ["면책·삭감", waitLabel(b)],
       // 급부 위험률은 탈퇴 사유(집단)에서 정해진다 — 사망형은 탈퇴 사유 전부, 진단형은 그 가운데 사망이 아닌 것
-      ["급부 위험률", b.role === "death" ? "탈퇴 사유 전부" : ev?.name ?? "—"],
+      ["급부 위험률", b.role === "death" ? "탈퇴 사유 전부" : ev?.name ?? (eventCauses(spec, b).length > 1 ? `사망 외 탈퇴 사유 전부 (${eventCauses(spec, b).map((r) => r.name).join(" · ")})` : "—")],
       ["탈퇴 위험률", (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—"],
       ["집단", groups.find((g) => g.benefitIdx.includes(i))?.label ?? "—"],
     ] as [string, string][]).map((row) => [row, `benefits[${i}]`])));

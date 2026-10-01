@@ -61,7 +61,7 @@ function paramSheet(s: DesignState, r: EngineResult) {
     add("alpha", "α 신계약비", e.alpha); add("beta", "β 유지비", e.beta); add("gamma", "γ 수금비", e.gamma);
   }
   rows.push([]);
-  rows.push(["위험률", p.product === "cancer" ? "암발생률(경험생명표(가상)) 단일탈퇴 · 사망 시 책임준비금 지급" : "제7회 경험생명표 (kli7) · 납입면제 이중탈퇴"]);
+  rows.push(["위험률", p.product === "cancer" ? "암발생률(경험생명표(가상)) 단일탈퇴 · 사망 시 책임준비금 지급" : "경험생명표(가상) (kli7) · 납입면제 이중탈퇴"]);
   rows.push(["프리셋", s.presetId], ["변경점", s.anchors.join(", ") || "없음"]);
   rows.push([], ["설계 제약", ""], ...Object.entries(s.settings.envelope).map(([k, v]) => [k, v] as Row));
   rows.push([], [`${BENEFIT_LABEL[p.product]} 구간 카드`, "배수", "연령"], ...deathSegments(s.blocks).map((b) => [`${b.fromAge}~${b.toAge}세`, b.multiple] as Row));

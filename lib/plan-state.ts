@@ -145,7 +145,7 @@ export const waitFactorOf = (months: number) => clamp(1 - months / 12, 0, 1);
 
 export function tabPlanInput(s: PlanState, tab: PlanTab, r: ResolvedSheet): { input: PlanInput; coverages: PlanCoverage[] } {
   const c0 = tabConditions(s, tab);
-  // 탈퇴 사유는 산출방법서의 잔존 식(1 − q − k + q·k/2)으로 묶는다.
+  // 탈퇴 사유는 산출방법서와 같은 규칙으로 묶는다 — 질병끼리는 곱, 사망과는 겹치는 부분 절반(combineColumns).
   // 사망형은 탈퇴 사유 전부에 같은 보험금을 준다(종신의 "사망 또는 80% 이상 장해") → 급부 = 탈퇴.
   // 납입면제 사유 가운데 그 담보의 탈퇴 사유인 것(예: 암진단 담보의 암 발생)은 탈퇴로 이미 줄었으므로 납입자수에서 다시 빼지 않는다
   const waiverIds = c0.waiver ? waiverCols(tab.sheet) : [];
@@ -155,6 +155,8 @@ export function tabPlanInput(s: PlanState, tab: PlanTab, r: ResolvedSheet): { in
     exit: combineColumns(tab.sheet, r, c.exitColIds),
     waitFactor: waitFactorOf(c.waitMonths),
     ...(waiverIds.some((id) => c.exitColIds.includes(id)) ? { waiverRate: combineColumns(tab.sheet, r, waiverIds.filter((id) => !c.exitColIds.includes(id))) } : {}),
+    // 납입 탈퇴율 — 탈퇴 사유의 질병과 납입면제 사유를 함께 곱으로 묶어 사망과 결합(산출방법서의 Q′)
+    ...(waiverIds.length ? { payExit: combineColumns(tab.sheet, r, [...c.exitColIds, ...waiverIds.filter((id) => !c.exitColIds.includes(id))]) } : {}),
     steps: c.steps, points: c.points,
   }));
   const input: PlanInput = {

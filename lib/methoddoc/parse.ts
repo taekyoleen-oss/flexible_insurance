@@ -222,8 +222,9 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   // 2) 본문 규칙
   scanLines(paragraphs, (li) => `본문 ${li + 1}줄`, "medium", spec, add);
 
-  // 3) 위험률 — "○ …률" 목록과 "…를 사용함" 문구
-  for (const [li, line] of paragraphs.entries()) {
+  // 3) 위험률 — "○ …률" 목록과 "…를 사용함" 문구.
+  //    표준 양식은 위험률을 표("위험률 | 기호 | 유형 | 근거·출처")로 싣는다 — 문단(식 설명 "급부 발생률 — …", 납입면제 문장)에서 줍지 않는다
+  if (!standard) for (const [li, line] of paragraphs.entries()) {
     if (continuation(paragraphs[li - 1])) continue;          // 앞 줄에서 잘린 토막
     const body = line.replace(/^\s*(?:[가-힣]\s*[).]|\(\s*\d+\s*\)|\d+\s*[).])\s*/, "");   // "가. ", "나) ", "(1) " 머리표 제거
     const m = /^[○◦\-·•]?\s*([가-힣A-Za-z0-9()\s]*?(?:률|율|지급률))\s*(?:×\s*([^:]*))?[:：]?\s*(.*)$/.exec(body);
@@ -402,6 +403,8 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
     const note = t.startsWith(NOTE_MARK) ? t.slice(NOTE_MARK.length).trim() : null;
     if (cur) {
       if (note !== null) { cur.note = cur.note ? `${cur.note} ${note}` : note; continue; }
+      // Word 는 긴 식을 여러 줄로 나눈다(wrapEquation) — 연산자로 시작하는 줄은 앞줄의 이어짐이다
+      if (!cur.note && cur.lines.length && /^[+−×·/]\s/.test(t)) { cur.lines[cur.lines.length - 1] += ` ${t}`; continue; }
       if (!cur.note) { cur.lines.push(t); continue; }
       flush();                                   // 설명 다음 글은 식이 아니다
     }

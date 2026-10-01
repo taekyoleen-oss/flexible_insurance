@@ -125,13 +125,17 @@ describe("위험률 유형 ↔ 담보·납입면제 연결", () => {
 });
 
 describe("탈퇴 사유 결합 — 유지자수·납입자수", () => {
-  it("사유 하나면 1 − q, 둘이면 1 − q − k + q·k/2, 셋이면 1 − Σ + Σ곱/2", () => {
+  it("질병끼리는 곱, 사망과는 겹치는 부분 절반 — 사망 하나면 q, 사망+질병 q + r − q·r/2, 질병 둘이면 1 − (1 − r₁)(1 − r₂) 를 사망과 결합", () => {
     expect(combineDecrements([[0.01]])).toEqual([0.01]);
-    const [two] = combineDecrements([[0.01], [0.002]]);
-    expect(1 - two).toBeCloseTo(1 - 0.01 - 0.002 + 0.01 * 0.002 / 2, 15);
-    const [three] = combineDecrements([[0.01], [0.002], [0.03]]);
-    expect(1 - three).toBeCloseTo(1 - 0.042 + (0.01 * 0.002 + 0.01 * 0.03 + 0.002 * 0.03) / 2, 15);
-    expect(combineDecrements([[1], [0.02]])).toEqual([1]);     // 사망률 1 인 나이는 1 로 막는다
+    const [two] = combineDecrements([[0.01]], [[0.002]]);
+    expect(two).toBeCloseTo(0.01 + 0.002 - (0.01 * 0.002) / 2, 15);
+    const [three] = combineDecrements([[0.01]], [[0.002], [0.03]]);
+    const R = 1 - (1 - 0.002) * (1 - 0.03);
+    expect(three).toBeCloseTo(0.01 + R - (0.01 * R) / 2, 15);
+    // 사망이 탈퇴 사유가 아니면(사망 시 책임준비금 지급) 질병 발생자만 탈퇴한다
+    const [ills] = combineDecrements([], [[0.002], [0.03]]);
+    expect(ills).toBeCloseTo(R, 15);
+    expect(combineDecrements([[1]], [[0.02]])).toEqual([1]);     // 사망률 1 인 나이는 1 로 막는다
   });
   it("진단형: 탈퇴 = 사망 ⊕ 진단, 급부 = 진단율 그대로", () => {
     const s = initialPlan();

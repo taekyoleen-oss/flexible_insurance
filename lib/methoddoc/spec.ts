@@ -189,6 +189,24 @@ export interface ProductInfo {
 /** 담보의 보장금액(원) — 배수가 있으면 가입금액 × 배수, 없으면 적힌 금액 */
 export const benefitAmount = (b: BenefitSpec, sumAssured: number) => (b.multiple !== undefined ? b.multiple * sumAssured : b.amount ?? 0);
 
+/** 이 나이 이상의 보험기간은 종신 — 사망률 표의 마지막 나이(그 해 사망률 1)까지 보장한다 */
+export const WHOLE_LIFE_AGE = 110;
+/**
+ * 보장기간 n(년). "보험기간 N세" 는 N세 만기 — 가입나이 x 부터 N−1세까지 보장한다(기존 산출방법서와 같다: 40세 · 100세 만기 → 60년,
+ * 20세 가입 20년 보장 → 39세까지). 종신(110세 이상)은 그 나이의 해까지(40세 → 71년).
+ */
+export const coverYears = (endAge: number | undefined, age: number) => {
+  const end = endAge ?? WHOLE_LIFE_AGE;
+  return Math.max(1, end >= WHOLE_LIFE_AGE ? end + 1 - age : end - age);
+};
+export const endAgeLabel = (endAge?: number) => (endAge === undefined ? "—" : endAge >= WHOLE_LIFE_AGE ? `종신 (${endAge}세)` : `${endAge}세 만기`);
+/**
+ * 계산하는 앱(자유설계보험)의 "보장 종료 연령"(그 나이까지 포함) ↔ 이 모듈의 만기 나이. 종신은 같은 수다.
+ * ponytail: 보장 종료 109세는 만기 110세 = 종신으로 바뀐다(한 해 더) — 110세 정기 만기가 필요하면 종신 표시를 따로 둔다
+ */
+export const lastCoveredAge = (endAge: number) => (endAge >= WHOLE_LIFE_AGE ? endAge : endAge - 1);
+export const maturityAge = (lastAge: number) => (lastAge >= WHOLE_LIFE_AGE ? lastAge : lastAge + 1);
+
 /** 계약 단위 이름 — 비어 있으면 주계약 */
 export const MAIN_UNIT = "주계약";
 export const unitOf = (b: BenefitSpec) => b.unit?.trim() || MAIN_UNIT;

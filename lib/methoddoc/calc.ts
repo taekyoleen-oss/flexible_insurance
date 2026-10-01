@@ -22,7 +22,7 @@
  *            α_S α_P β_S β_G β′ γ 사업비 · 위험률 기호(q · r · f · w …)는 담보별 식의 첫 줄에서 정한다
  */
 import { benefitModels, isMethodExpenses, waitLabel, withFormulas, type BenefitModel } from "./formulas";
-import { benefitAmount, rateTable, unitOf, type FormulaSpec, type MethodSpec, type RateRef, type Sex } from "./spec";
+import { benefitAmount, coverYears, rateTable, unitOf, WHOLE_LIFE_AGE, type FormulaSpec, type MethodSpec, type RateRef, type Sex } from "./spec";
 
 // ── 식 읽기 ──────────────────────────────────────────────────────────────────
 export type Node =
@@ -145,7 +145,12 @@ class Reader {
     while (this.s[this.i] === "_") {
       this.i++;
       const sub = this.script();
-      if (isIndex(sub)) return { t: "ref", name, idx: indexNode(sub) };
+      if (isIndex(sub)) {
+        // 자리 뒤에 붙은 이름 위첨자 — Word·한글은 r^{(1)}_{x+t} 를 r_{x+t}^{(1)} 순서로 돌려준다. 거듭제곱이 아니라 이름이다
+        const m = this.s[this.i] === "^" ? /^\^\{([^{}]*)\}/.exec(this.s.slice(this.i)) : null;
+        if (m && /[(가-힣]/.test(m[1])) { this.i += m[0].length; name += `^{${m[1]}}`; }
+        return { t: "ref", name, idx: indexNode(sub) };
+      }
       name += `_${sub}`;
     }
     if (this.peek() === "(" && (FUNCS.has(name) || ROUND_N.test(name))) {
@@ -411,7 +416,7 @@ const KEYS_OF = (m: BenefitModel) => (f: FormulaSpec) =>
  */
 function prepare(spec: MethodSpec, m: BenefitModel, contract: CalcContract, formulas: FormulaSpec[]) {
   const b = m.b;
-  const n = Math.max(1, Math.min(contract.termYears ?? 999, (b.endAge ?? 110) + 1 - contract.age));
+  const n = Math.max(1, Math.min(contract.termYears ?? 999, coverYears(b.endAge, contract.age)));
   const pay = Math.min(contract.payYears, n);
   const sumAssured = contract.sumAssured ?? SUM_ASSURED_DEFAULT;
   const amount = benefitAmount(b, sumAssured);
@@ -486,7 +491,7 @@ function premiumOf(mo: Model, amount: number) {
  * 산출방법서의 식으로 담보마다 보험료를 낸다 — 조건(위험률·금액·기간)과 식을 함께 쓴다.
  * 쓰는 식은 withFormulas 를 거친 것이라 **사용자가 고친 식이 그대로 계산에 반영된다.**
  * 담보 하나를 독립된 소형 상품으로 본다(자유설계보험 computePlan 과 같은 규칙):
- * 보장기간 n = min(계약 보험기간, 보험기간(종료 나이) + 1 − 가입나이), 납입기간 m = min(납입기간, n).
+ * 보장기간 n = min(계약 보험기간, 만기 나이 − 가입나이) — 100세 만기면 99세까지(종신은 표 끝 나이의 해까지, coverYears), 납입기간 m = min(납입기간, n).
  * 보장금액 = 가입금액 × 배수는 맨 뒤(담보 보험료)에서만 곱한다 — 그 앞은 모두 1원당이다.
  */
 export function computeSpec(spec: MethodSpec, contract: CalcContract = CALC_DEFAULT): CalcResult {
@@ -535,7 +540,7 @@ export function checkFormula(f: FormulaSpec): { ok: boolean; skipped: string[] }
 // ── 계산 표 — 엑셀처럼 한 해 한 줄 ──────────────────────────────────────────
 /** 기호의 뜻. 위험률 기호(q · r · f · g)는 조건의 위험률 이름으로 덮어쓴다 */
 const SYM_LABEL: Record<string, string> = {
-  Q: "탈퇴율", w: "적용해지율", l: "유지자수", "l′": "납입자수", d: "지급자수 (급부 발생자)",
+  R: "질병 발생률 (질병끼리 곱 결합)", Q: "탈퇴율", F: "납입면제까지 묶은 질병 발생률 (곱 결합)", "Q′": "납입 탈퇴율", w: "적용해지율", l: "유지자수", "l′": "납입자수", d: "지급자수 (급부 발생자)",
   D: "유지자수의 현가", "D′": "납입자수의 현가", H: "해지자의 현가",
   N: "유지자수 현가의 누계", "N′": "납입자수 현가의 누계",
   S: "보장금액의 배수", E: "생존 지급 배수", C: "급부 발생자의 현가", M: "보험금 현가의 누계", CSV: "해지급부의 현가 (이 앱은 0)",
@@ -547,8 +552,8 @@ const SYM_LABEL: Record<string, string> = {
   v: "현가율", i: "적용이율", n: "보장기간(년)", m: "납입기간(년)", k: "납입주기별 계수", x: "가입나이",
 };
 /** 왼쪽부터 이 순서로 — 위험률 → 사람 수 → 사람 수의 현가·누계 → 보험금 → 준비금 → 환급금 */
-const COL_ORDER = ["Q", "l", "l′", "d", "D", "D′", "H", "N", "N′", "S", "E", "C", "M", "V", "V^{10만}", "해약공제", "W^{표준}", "W", "납입누계", "환급률"];
-const DIGITS: Record<string, number> = { l: 2, "l′": 2, d: 4, D: 4, "D′": 4, H: 4, N: 2, "N′": 2, C: 6, M: 4, S: 4, E: 4, Q: 8, w: 6,
+const COL_ORDER = ["R", "Q", "l", "F", "Q′", "l′", "d", "D", "D′", "H", "N", "N′", "S", "E", "C", "M", "V", "V^{10만}", "해약공제", "W^{표준}", "W", "납입누계", "환급률"];
+const DIGITS: Record<string, number> = { R: 8, F: 8, "Q′": 8, l: 2, "l′": 2, d: 4, D: 4, "D′": 4, H: 4, N: 2, "N′": 2, C: 6, M: 4, S: 4, E: 4, Q: 8, w: 6,
   V: 8, "V^{10만}": 0, 해약공제: 8, "W^{표준}": 8, W: 8, 납입누계: 8, 환급률: 4 };
 /** 표 아래 한 값으로 나오는 것 — 이 순서로 */
 const SCALARS = ["N*", "PVB", "PVB′", "P", "P_base", "G", "G₁", "G_10만", "P_β", "α^{공제}"];
@@ -651,7 +656,7 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
         { label: "가입나이 x", name: "x_age", value: contract.age, digits: 0, note: "세" },
         { label: "성별", value: contract.sex === "F" ? "여" : "남" },
         { label: "보험가입금액", name: "sum_assured", value: sumAssured, digits: 0, note: "원" },
-        { label: "보장기간 n", name: "n_term", value: n, digits: 0, note: `년 — min(보험기간, ${b.endAge ?? 110}세 + 1 − 가입나이)`, perBenefit: true },
+        { label: "보장기간 n", name: "n_term", value: n, digits: 0, note: (b.endAge ?? WHOLE_LIFE_AGE) >= WHOLE_LIFE_AGE ? `년 — 종신: ${b.endAge ?? WHOLE_LIFE_AGE}세 + 1 − 가입나이 (표 끝 나이의 해까지)` : `년 — ${b.endAge}세 만기 − 가입나이 (${b.endAge! - 1}세까지)`, perBenefit: true },
         { label: "납입기간 m", name: "m_pay", value: pay, digits: 0, note: "년 — min(납입기간, n)", perBenefit: true },
         { label: "납입주기 k", name: "k_freq", value: contract.freq, digits: 0, note: "연 납입횟수" },
         { label: "적용이율 i", name: "i_rate", value: scalar.i, digits: 6 },

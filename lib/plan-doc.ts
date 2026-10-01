@@ -3,7 +3,7 @@ import type { RateKind } from "./plan-rates";
 import { isFormula } from "./sheet-formula";
 import { BENEFIT_KINDS } from "./engine/plan";
 import { FREQS, tabConditions, waitFactorOf, type PlanState, type ProductResult } from "./plan-state";
-import { emptySpec, type BenefitSpec, type ExpenseItem, type MethodSpec, type RateRef, type RateRole } from "./methoddoc/spec";
+import { emptySpec, maturityAge, type BenefitSpec, type ExpenseItem, type MethodSpec, type RateRef, type RateRole } from "./methoddoc/spec";
 import { renderMethodDoc, type DocSection } from "./methoddoc/render";
 import { withFormulas } from "./methoddoc/formulas";
 
@@ -17,7 +17,7 @@ export { docToHtml, docToMarkdown, isNumericCell, type DocBlock, type DocSection
 const ROLE: Record<RateKind, RateRole> = { death: "death", incidence: "incidence", recurring: "recurring", other: "other" };
 const BENEFIT_ROLE = { death: "death", incidence: "incidence", daily: "recurring", survival: "other" } as const;
 const won = (x: number) => wonExact(Math.round(x));
-/** 열 이름을 지급 사유 낱말로 — "제7회 경험생명표 사망률 q" → "사망", "80% 이상 장해율" → "80% 이상 장해" */
+/** 열 이름을 지급 사유 낱말로 — "사망률 q" → "사망", "80% 이상 장해율" → "80% 이상 장해" */
 const shortName = (c: { kind: RateKind; name: string }) => (c.kind === "death" ? "사망" : c.name.replace(/\s*(발생)?[율률]\s*[a-zA-Z]?$/, ""));
 
 /** 급부 유형별 지급 사유 문구 */
@@ -68,7 +68,7 @@ export function planToSpec(s: PlanState, p: ProductResult): MethodSpec {
       const b: BenefitSpec = {
         id, name: c.label, unit: tab.name, role: BENEFIT_ROLE[c.kind],
         trigger: c.kind === "death" && exitCols.length > 1 ? `${exitCols.map(shortName).join(" 또는 ")} 시` : TRIGGER[c.kind],
-        amount: c.amount, endAge: c.endAge,
+        amount: c.amount, endAge: maturityAge(c.endAge),   // 보장 종료 연령 N세 → 산출방법서의 N+1세 만기
         waitDays: c.waitMonths ? Math.round(c.waitMonths * 30.4) : undefined,
         rateId: c.kind === "survival" || c.kind === "death" ? undefined : `${tab.id}:${c.eventColId}`,   // 사망형은 급부 = 탈퇴
         exitRateIds: c.exitColIds.map((x) => `${tab.id}:${x}`),

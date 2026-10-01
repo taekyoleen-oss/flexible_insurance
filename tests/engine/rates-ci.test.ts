@@ -35,12 +35,12 @@ describe("특약 위험률이 실제 발생률을 쓴다", () => {
   const rows = riderPremiums(reducer(initialState(), { type: "profile", patch: { sex: "M", age: 40 } }));
   const stroke = rows.find((r) => r.id === "stroke")!, ami = rows.find((r) => r.id === "ami")!;
 
-  it("사건 발생률 = 제공 표, 탈퇴 = 사망 + 발생 (예전 사망률 × 0.35·0.30 계수가 아니다)", () => {
+  it("사건 발생률 = 제공 표, 탈퇴 = 사망 ⊕ 발생 = q + r − q·r/2 (예전 사망률 × 0.35·0.30 계수가 아니다)", () => {
     const q = kli7.M.q;
     expect(stroke.event[40]).toBeCloseTo(ci.stroke.M[40], 12);
     expect(ami.event[40]).toBeCloseTo(ci.ami.M[40], 12);
-    expect(stroke.exit[40]).toBeCloseTo(q[40] + ci.stroke.M[40], 12);
-    expect(ami.exit[40]).toBeCloseTo(q[40] + ci.ami.M[40], 12);
+    expect(stroke.exit[40]).toBeCloseTo(q[40] + ci.stroke.M[40] - (q[40] * ci.stroke.M[40]) / 2, 12);
+    expect(ami.exit[40]).toBeCloseTo(q[40] + ci.ami.M[40] - (q[40] * ci.ami.M[40]) / 2, 12);
     expect(stroke.event[40]).not.toBeCloseTo(q[40] * 0.35, 6);
   });
   it("표 끝(뇌출혈 84·AMI 79세) 뒤에는 마지막 값을 이어 쓴다", () => {

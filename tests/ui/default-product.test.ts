@@ -24,10 +24,10 @@ describe.runIf(existsSync(SPEC))("Studio 기본 상품 → 이 앱의 계산", (
       ["사망률", "death", false], ["80% 이상 장해율", "incidence", true], ["암발생률", "incidence", true],
     ]);
     expect(tab.coverages.map((c) => [c.label, c.kind, c.amount, c.endAge, c.waitMonths])).toEqual([
-      ["사망·80% 이상 장해", "death", 1e8, 110, 0], ["암 진단", "incidence", 5e7, 100, 3],
+      ["사망·80% 이상 장해", "death", 1e8, 110, 0], ["암 진단", "incidence", 5e7, 99, 3],   // 산출방법서의 100세 만기 = 보장 종료 연령 99세
     ]);
     expect([state.sex, state.age, state.base.payYears, state.base.freq, state.base.waiver]).toEqual(["M", 40, 20, 12, true]);
-    expect(p.coverages.map((c) => [c.n, c.payYears])).toEqual([[71, 20], [61, 20]]);
+    expect(p.coverages.map((c) => [c.n, c.payYears])).toEqual([[71, 20], [60, 20]]);
   });
 
   it("납입면제 사유가 그 담보의 탈퇴 사유이기도 하면 다시 빼지 않는다 — 두 담보 모두 납입자수는 사망·장해·암으로 준다", () => {
