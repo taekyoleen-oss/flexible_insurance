@@ -33,6 +33,8 @@ export interface EngineResult {
 }
 
 const r0 = (x: number) => Math.round(x * 1e5);
+/** 1원당 영업보험료는 소수 여섯째 자리까지 만든 뒤 10만원당으로 — Studio 산출방법서의 식(G₁ = round₆(G) → G_{10만})과 같다 */
+const r6 = (x: number) => Math.round(Math.round(x * 1e6) / 1e6 * 1e5);
 
 function scaleAlphaP(e: Expenses, n: number): Expenses {
   if (e.model !== "method" || n >= 20) return e;
@@ -62,7 +64,7 @@ export function compute(input: EngineInput, a: AssumptionSet, table: RateTable):
   const Vs = reserves(ks, c, e, ps);
 
   const units = input.S0 / 100000;
-  const per100k = { net: r0(p.net), gross: r0(p.gross), base: r0(p.base), alpha: r0(p.alpha), alphaStd: r0(ps.alpha), newBiz: Math.min(r0(p.alpha), r0(ps.alpha)) };
+  const per100k = { net: r0(p.net), gross: r6(p.gross), base: r0(p.base), alpha: r0(p.alpha), alphaStd: r0(ps.alpha), newBiz: Math.min(r0(p.alpha), r0(ps.alpha)) };
   const reserve100k = V.map(r0), reserveStd100k = Vs.map(r0);
   const sur = surrender(reserve100k, per100k.newBiz, per100k.gross, c.payYears, freq, units);
 
@@ -102,7 +104,7 @@ export function compute(input: EngineInput, a: AssumptionSet, table: RateTable):
     const csvL = csvOf(kL), csvsL = csvOf(ksL);
     const pL = premium(kL, c, e, csvL[0]);
     const psL = premium(ksL, c, e, csvsL[0]);
-    const net100k = r0(pL.net), gross100k = r0(pL.gross);
+    const net100k = r0(pL.net), gross100k = r6(pL.gross);
     // 납입 완료 후에는 해지율이 0이라 저해지형 준비금이 표준형과 같아진다 → 환급금도 같다
     const cash = sur.cash.map((x, t) => (t < m ? Math.round(x * ratio) : x));
     const paid = cash.map((_, t) => Math.min(t, m) * freq * gross100k * units);

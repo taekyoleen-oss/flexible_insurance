@@ -1,4 +1,4 @@
-import { groupModels } from "./formulas";
+import { amountLabel, eventRate, groupModels, waitLabel } from "./formulas";
 import { hasContract, hasProduct, RATE_ROLE_LABEL, waiverRates, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
@@ -37,8 +37,11 @@ const yearsOf = (y?: number, a?: number) => (y ? `${y}년` : a ? `${a}세 만기
  *  v4 (2026-09-28): 실무 산출방법서의 장 구성을 따른다 — **1. 보험료의 계산에 관한 사항**(가. 예정기초율 · 나. 보장 내용 ·
  *     다. 기호의 정의 · 라. 유지자수·납입자수 · 마. 계산기수 — 보험료 · 바. 계산기수 — 보험금 · 사. 순보험료 및 영업보험료) →
  *     **2. 책임준비금의 계산에 관한 사항** → **3. 해지환급금의 계산에 관한 사항**. 소제목은 `kind: "sub"` 블록이다.
+ *  v5 (2026-10-01): 담보 표가 실무 모양 — 보험기간(종료 나이) · 보장금액은 **가입금액의 배수**(1배 · 0.5배) · 면책·삭감(기간과 지급 비율).
+ *     라. 는 집단마다 유지자수(l)와 납입자수(l′) 두 덩이, 마. 는 납입자수 쪽(D′ · N′ · N*), 바. 는 유지자수 쪽(D · N)과 담보의 S · C · M · PVB.
+ *     사. 에 1원당 반올림(G₁ = round₆) → 10만원당(G_{10만}). 2·3 장의 준비금·환급금 식은 모두 계산할 수 있는 식이다(V · P_β · 해약공제 · W · 환급률).
  */
-export const STANDARD_FORMAT = "표준 산출방법서 v4";
+export const STANDARD_FORMAT = "표준 산출방법서 v5";
 
 /** 1장 안의 소제목 차례 — 실무 산출방법서의 "가. 예정기초율 … 사. 순보험료 및 영업보험료" */
 const PREMIUM_SUBS = ["유지자수·납입자수", "계산기수 — 보험료", "계산기수 — 보험금", "순보험료 및 영업보험료"];
@@ -145,7 +148,9 @@ function symbolBlocks(spec: MethodSpec, groups: ReturnType<typeof groupModels>):
     ...(groups.length > 1 ? groups.map((g, i): [string, string] => [`집단 ${i + 1} — ${g.label}`,
       `l : ${reasons(g)} 가 생기지 않은 사람 수 · l′ : 거기에 ${g.waivers.length ? `${waivers(g)} 까지` : "더 뺄 사유 없이"} — ${g.benefitIdx.map((k) => spec.benefits[k]?.name).filter(Boolean).join(" · ")} 담보가 쓴다`]) : []),
     ["d_{x+t}", "t시점 지급자수 — 그 담보의 급부가 생긴 사람 수 (바. 의 C 식에 들어간다)"],
-    ["S_t", "t년도 보장금액의 배수 — 연령 구간 배수와 면책을 반영한다(바.)"],
+    ["S_t", "t년도 보장금액의 배수 — 면책·삭감(기간과 지급 비율)을 반영한다(바.). 보장금액 = 보험가입금액 × 담보의 배수"],
+    ["V_t", "t년도 말 책임준비금 (보장금액 1원당, 2.)"],
+    ["W_t", "t년도 말 해지환급금 (보장금액 1원당, 3.)"],
     ...(spec.basis.waiver && waiverRates(spec).length ? [["f_{x+t}", "납입만 면제되는 사유의 발생률 — 집단마다 그 집단의 탈퇴 사유를 뺀 것 (가.(4))"] as [string, string]] : []),
     ...(lapse ? [["w_{x+t}", "적용해지율 (가.(3))"] as [string, string]] : []),
     ...(lapse && spec.basis.lowRatio !== undefined ? [["ρ", "납입기간 중 해지환급금 비율 (가.(3) — 무해지 0)"] as [string, string]] : []),
@@ -249,18 +254,21 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   const groups = groupModels(spec);
   if (groups.length) {
     unitBlocks.push({ t: "note", path: groups.flatMap((g) => g.benefitIdx.map((i) => `benefits[${i}]`)).join("|"),
-      text: `유지자수·납입자수의 집단 ${groups.length}개 — ${groups.map((g) => `“${g.label}”(${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")})`).join(", ")}. 집단마다 l · l′ 를 라. 에서 한 번만 낸다.` });
+      text: `유지자수·납입자수의 집단 ${groups.length}개 — ${groups.map((g) => `“${g.label}”(${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")})`).join(", ")}. 집단마다 l · l′ 를 라. 에서 한 번만 낸다. 보장금액은 보험가입금액 × 배수이고, 보험료·준비금은 보장금액 1원당으로 낸 뒤 맨 뒤에서 곱한다.` });
   }
   spec.benefits.forEach((b, i) => {
+    const ev = eventRate(spec, b);
     unitBlocks.push(table(["담보", b.name], ([
-      ["단위", b.unit ?? "주계약"],
+      // 계약 단위는 특약이 있을 때만(주계약뿐이면 적지 않는다)
+      ...(b.unit ? [["단위", b.unit] as [string, string]] : []),
       ["급부 유형", RATE_ROLE_LABEL[b.role]],
       // 지급 사유는 담보 이름과 겹치기 쉬워 따로 적었을 때만 싣는다
       ...(b.trigger ? [["지급 사유", b.trigger] as [string, string]] : []),
-      ["보장금액", wonOf(b.amount) + (b.role === "recurring" ? "/일" : "")],
-      ["보장 종료", b.endAge ? `${b.endAge}세` : "—"],
-      ["면책", b.waitDays ? `${b.waitDays}일` : "없음"],
-      ["급부 위험률", b.role === "death" && !b.rateId ? "탈퇴 사유 전부" : rateName(b.rateId)],
+      ["보험기간", b.endAge ? `${b.endAge}세${b.endAge >= 110 ? " (종신)" : ""}` : "—"],
+      ["보장금액", amountLabel(b)],
+      ["면책·삭감", waitLabel(b)],
+      // 급부 위험률은 탈퇴 사유(집단)에서 정해진다 — 사망형은 탈퇴 사유 전부, 진단형은 그 가운데 사망이 아닌 것
+      ["급부 위험률", b.role === "death" ? "탈퇴 사유 전부" : ev?.name ?? "—"],
       ["탈퇴 위험률", (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—"],
       ["집단", groups.find((g) => g.benefitIdx.includes(i))?.label ?? "—"],
     ] as [string, string][]).map((row) => [row, `benefits[${i}]`])));

@@ -64,12 +64,19 @@ export interface BenefitSpec {
   role: Exclude<RateRole, "waiver" | "lapse">;
   /** 지급 사유 문구 ("암으로 진단확정 시", "사망 시") */
   trigger?: string;
-  /** 보장금액(원). 일당형은 1일당 */
+  /**
+   * 보장금액 = 보험가입금액 × 배수 (사망 1배 · 암 진단 0.5배 …). 실무 산출방법서가 이렇게 적는다 — 보험료는 1원당으로 먼저 내고
+   * 맨 뒤에 가입금액 × 배수를 한꺼번에 곱한다. 계산하는 계약의 가입금액(CalcContract.sumAssured)이 곱해진다
+   */
+  multiple?: number;
+  /** 보장금액(원). 배수(multiple)가 없을 때만 — 옛 문서·다른 앱의 절대 금액. 일당형은 1일당 */
   amount?: number;
-  /** 보장 종료 연령 */
+  /** 보험기간(보장 종료 연령 — 100세 · 종신 110세) */
   endAge?: number;
-  /** 면책기간(일) */
+  /** 면책·삭감 기간(일) — 30 · 90 · 180 · 365 · 730 */
   waitDays?: number;
+  /** 면책·삭감 기간 중 지급 비율 — 0 = 면책(지급 없음, 암) · 0.5 = 50% 삭감(특정 사망 등). 없으면 0 */
+  waitPayRatio?: number;
   /** 급부 위험률 id */
   rateId?: string;
   /** 탈퇴 위험률 id 목록 */
@@ -177,6 +184,18 @@ export interface ProductInfo {
   sumLimit?: string;
   /** 갱신 — "비갱신형", "10년 갱신 (최대 100세)" */
   renewal?: string;
+}
+
+/** 담보의 보장금액(원) — 배수가 있으면 가입금액 × 배수, 없으면 적힌 금액 */
+export const benefitAmount = (b: BenefitSpec, sumAssured: number) => (b.multiple !== undefined ? b.multiple * sumAssured : b.amount ?? 0);
+
+/** 계약 단위 이름 — 비어 있으면 주계약 */
+export const MAIN_UNIT = "주계약";
+export const unitOf = (b: BenefitSpec) => b.unit?.trim() || MAIN_UNIT;
+/** 조건에 나오는 계약 단위(주계약 먼저) — 담보의 unit 이름에서 만든다(따로 적는 항목이 아니다). units 가 적혀 있으면 그 이름도 */
+export function unitNames(spec: MethodSpec): string[] {
+  const names = [...spec.units.map((u) => u.name), ...spec.benefits.map(unitOf)];
+  return [MAIN_UNIT, ...new Set(names.filter((n) => n !== MAIN_UNIT))];
 }
 
 /** 시산 기준이 적혀 있는지 */
@@ -288,6 +307,8 @@ export function validateSpec(spec: MethodSpec): string[] {
   }
   for (const id of spec.basis.waiverRateIds ?? []) if (!spec.rates.some((r) => r.id === id)) out.push(`납입면제 사유 위험률(${id})이 목록에 없습니다`);
   for (const b of spec.benefits) {
+    if (b.multiple !== undefined && (b.multiple <= 0 || b.multiple > 100)) out.push(`담보 "${b.name}"의 보장금액 배수 ${b.multiple} 는 범위(0~100배) 밖입니다`);
+    if (b.waitPayRatio !== undefined && (b.waitPayRatio < 0 || b.waitPayRatio > 1)) out.push(`담보 "${b.name}"의 면책·삭감 지급 비율 ${b.waitPayRatio} 는 범위(0~100%) 밖입니다`);
     if (b.rateId && !spec.rates.some((r) => r.id === b.rateId)) out.push(`담보 "${b.name}"의 급부 위험률(${b.rateId})이 목록에 없습니다`);
     for (const id of b.exitRateIds ?? []) if (!spec.rates.some((r) => r.id === id)) out.push(`담보 "${b.name}"의 탈퇴 위험률(${id})이 목록에 없습니다`);
   }

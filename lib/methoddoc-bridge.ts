@@ -5,6 +5,7 @@ import {
 import { newColId, type RateColumn, type RateKind, type RateSheet } from "./plan-rates";
 import type { BenefitKind, Expenses, ExpensesMethod } from "./engine";
 import { planToSpec } from "./plan-doc";
+import { eventRate } from "./methoddoc/formulas";
 import { emptySpec, rateTable, type BenefitSpec, type BasisSpec, type ContractSpec, type Evidence, type ExpenseItem, type MethodSpec, type RateRef, type RateRole, type Sex } from "./methoddoc/spec";
 
 /**
@@ -231,10 +232,13 @@ export function planFromSpec(spec: MethodSpec): { state: PlanState; warnings: st
     const sheet: RateSheet = { ages, columns };
     const coverages = u.benefitIds.map((id) => spec.benefits.find((b) => b.id === id)).filter((b): b is BenefitSpec => !!b).map((b): PlanCoverageState => {
       const kind = COVER[b.role] ?? "incidence";
-      const eventColId = (b.rateId && colOf.get(b.rateId)) || suggestEventCol(sheet, kind);
+      // 급부 위험률 — 적힌 rateId, 없으면 탈퇴 사유 가운데 사망이 아닌 것(Studio v5 는 rateId 를 적지 않는다)
+      const ev = eventRate(spec, b);
+      const eventColId = (b.rateId && colOf.get(b.rateId)) || (ev && colOf.get(ev.id)) || suggestEventCol(sheet, kind);
       const exits = (b.exitRateIds ?? []).map((x) => colOf.get(x)).filter((x): x is string => !!x);
       return {
-        id: fresh("c"), label: b.name, kind, amount: b.amount ?? 3e7, endAge: b.endAge ?? endDefault,
+        // 보장금액 = 가입금액 × 배수(Studio v5) — 가입금액이 없으면 1억 기준. 옛 문서는 절대 금액
+        id: fresh("c"), label: b.name, kind, amount: b.amount ?? (b.multiple !== undefined ? b.multiple * (spec.contract.sumAssured ?? 1e8) : 3e7), endAge: b.endAge ?? endDefault,
         waitMonths: b.waitDays ? Math.round(b.waitDays / 30.4) : 0,     // planToSpec 이 개월 × 30.4 로 낸다
         eventColId, exitColIds: exits.length ? exits : autoExitCols(sheet, kind, eventColId),
         steps: b.steps ?? [], points: b.points ?? [],

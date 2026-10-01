@@ -85,6 +85,8 @@ export interface PlanResult {
 }
 
 const r0 = (x: number) => Math.round(x * 1e5);
+/** 1원당 영업보험료는 소수 여섯째 자리까지 만든 뒤 10만원당으로 — Studio 산출방법서의 식(G₁ = round₆(G) → G_{10만})과 같다 */
+const r6 = (x: number) => Math.round(Math.round(x * 1e6) / 1e6 * 1e5);
 const zeros = (len: number) => new Array<number>(len).fill(0);
 const addInto = (dst: number[], src: number[]) => { for (let t = 0; t < src.length && t < dst.length; t++) dst[t] += src[t]; return dst; };
 
@@ -125,7 +127,7 @@ function coverage(c: PlanCoverage, input: PlanInput, n: number, N: number): Plan
   const p = premium(k, contract, e);
   const ps = premium(ks, contract, e);
   const per100k = {
-    net: r0(p.net), gross: r0(p.gross), base: r0(p.base),
+    net: r0(p.net), gross: r6(p.gross), base: r0(p.base),
     alpha: r0(p.alpha), alphaStd: r0(ps.alpha), newBiz: Math.min(r0(p.alpha), r0(ps.alpha)),
   };
   const units = c.amount / 1e5;
@@ -158,7 +160,7 @@ function coverage(c: PlanCoverage, input: PlanInput, n: number, N: number): Plan
     };
     const csv = csvOf(kL), csvs = csvOf(ksL);
     const pL = premium(kL, contract, e, csv[0]), psL = premium(ksL, contract, e, csvs[0]);
-    const net100k = r0(pL.net), gross100k = r0(pL.gross);
+    const net100k = r0(pL.net), gross100k = r6(pL.gross);
     out.low = {
       net100k, gross100k, monthlyNet: net100k * units, monthlyGross: gross100k * units, pvCsv: csv[0], perUnit: pL,
       reserve: grow(reserves(kL, contract, e, pL, csv).map((v) => r0(v) * units), N + 1),

@@ -1,5 +1,5 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { generateFormulas } from "./formulas";
+import { eventRate, generateFormulas } from "./formulas";
 import { FORMULA_MARK, NOTE_MARK } from "./render";
 import { emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole } from "./spec";
 
@@ -353,7 +353,7 @@ type Add = (path: string, label: string, value: string | number | boolean, raw: 
 const numIn = (s: string) => { const m = /(-?[\d,]+(?:\.\d+)?)/.exec(s); return m ? n(m[1]) : null; };
 
 /** 식 비교용 — 빈칸·중괄호·표기 차이(LaTeX 를 거쳐 온 ′ − ₅ 등)를 지운다 */
-const SCRIPT_ARG = String.raw`(\{[^{}]*\}|[^\s_^{}()]+)`;
+const SCRIPT_ARG = String.raw`(\{[^{}]*\}|[^\s_^{}(),]+)`;   // 쉼표는 첨자가 아니다 — "W^{표준}_t, W^{표준}_t" 의 첫 첨자가 "t," 로 붙지 않게
 export const normFormula = (s: string) => s
   .replace(new RegExp(String.raw`\^${SCRIPT_ARG}_${SCRIPT_ARG}`, "g"), "_$2^$1")
   .replace(/[₀-₉]/g, (c) => `_${c.charCodeAt(0) - 0x2080}`).replace(/[\s{}]/g, "")
@@ -430,12 +430,15 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   // 옛 판의 자동 식은 지금 판에서 나뉘거나 이름이 바뀌었다 — 그 제목은 건너뛰고(사람이 고친 것인지 알 수 없다), 사람이 더한 식만 둔다
   //  v1 → v2: 계산기수가 나뉘고 기호가 바뀌었다(mm → k, 발생률 k → r)
   //  v2 → v3: 계산기수가 "보험료의 현가"·"보험금의 현가" 로 나뉘고, 유지자수·납입자수는 담보가 아니라 집단마다 적는다
-  const v1 = /v1\s*$/.test(format), v2 = /v2\s*$/.test(format), v3 = /v3\s*$/.test(format);
+  const v1 = /v1\s*$/.test(format), v2 = /v2\s*$/.test(format), v3 = /v3\s*$/.test(format), v4 = /v4\s*$/.test(format);
   const V1_AUTO = /^(유지자수·납입자수 — |(계산기수|급부 현가와 납입기수|순보험료·기준연납순보험료|영업보험료|저해지·무해지환급형|연말 책임준비금|해약공제와 해지환급금|환급률)$)/;
   const V2_AUTO = /^(유지자수·납입자수 — |(유지자수의 현가 \(D\)|납입자수의 현가 \(D′\)|급부 발생자의 현가 \(C\)|유지자수 현가의 누계 \(N\)|납입자수 현가의 누계 \(N′\)|급부 현가 \(PVB\))$)/;
+  //  v4 → v5: 집단 식이 유지자수·납입자수 둘로 나뉘고, 현가·준비금·환급금 식의 글과 설명이 모두 바뀌었다 — 옛 자동 식 제목은 전부 건너뛴다
+  const V4_AUTO = /^(유지자수·납입자수 — |보험금의 현가 — |(유지자수·납입자수의 현가 \(D · D′\)|해지자의 현가 \(W\)|현가의 누계 \(N · N′\)|연납 환산 납입기수 \(N\*\)|순보험료 \(P\)|기준연납순보험료|영업보험료|저해지·무해지환급형|준비금 산출용 순보험료|연말 책임준비금|해약공제|해약공제 기준 신계약비|표준형 해지환급금|저해지·무해지환급형 해지환급금|환급률|납입누계)$)/;
   spec.formulas = read.filter((f) => {
     if (v1 && V1_AUTO.test(f.label)) return false;
     if (v2 && V2_AUTO.test(f.label)) return false;
+    if (v4 && V4_AUTO.test(f.label)) return false;
     // v3 → v4 는 절 이름만 바뀌었다(제목은 그대로) — 절 이름을 지금 것으로 옮겨 자동 식과 맞춘다
     if (v3) { const a0 = auto.find((x) => x.label === f.label); if (a0) f.section = a0.section; }
     const a = auto.find((x) => x.section === f.section && x.label === f.label);
@@ -523,7 +526,8 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
     return ref;
   };
   const multi = doc.tables.some((x) => squeeze(x.head.join("")).includes("주계약과다른조건"));
-  const KEYS = ["담보", "단위", "급부유형", "지급사유", "보장금액", "보장종료", "면책", "급부위험률", "탈퇴위험률"] as const;
+  // v5: 보험기간(= 옛 보장 종료) · 보장금액은 "가입금액의 0.5배" · 면책·삭감(= 옛 면책 + 지급 비율). 옛 열쇠도 그대로 읽는다
+  const KEYS = ["담보", "단위", "급부유형", "지급사유", "보장금액", "보장종료", "보험기간", "면책", "면책·삭감", "급부위험률", "탈퇴위험률"] as const;
   type Rec = Partial<Record<(typeof KEYS)[number], string>>;
   const add = (f: Rec, raw: string, ti: number) => {
     const get = (k: keyof Rec) => (f[k] ?? "").trim();
@@ -537,15 +541,24 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
       ...(get("단위") && !(get("단위") === "주계약" && !multi) ? { unit: get("단위") } : {}),
       ...(get("지급사유") && get("지급사유") !== "—" ? { trigger: get("지급사유") } : {}),
     };
-    const amt = numIn(get("보장금액"));
-    if (amt !== null) bs.amount = amt;
-    const end = /(\d+)\s*세/.exec(get("보장종료"));
+    const mult = /([\d.]+)\s*배/.exec(get("보장금액"));
+    if (mult) bs.multiple = Number(mult[1]);
+    else { const amt = numIn(get("보장금액")); if (amt !== null) bs.amount = amt; }
+    const end = /(\d+)\s*세/.exec(get("보험기간") || get("보장종료"));
     if (end) bs.endAge = Number(end[1]);
-    const wait = /(\d+)\s*일/.exec(get("면책"));
+    const waitText = get("면책·삭감") || get("면책");
+    const wait = /(\d+)\s*일/.exec(waitText), waitY = /(\d+)\s*년/.exec(waitText);
     if (wait) bs.waitDays = Number(wait[1]);
-    if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) bs.rateId = byName(ev, name)?.id;
+    else if (waitY) bs.waitDays = Number(waitY[1]) * 365;
+    const cut = /(\d+)\s*%\s*삭감/.exec(waitText);
+    if (bs.waitDays && cut) bs.waitPayRatio = Number(cut[1]) / 100;
     const ids = exits.split(/\s+및\s+|\s*\+\s*|,\s*/).map((x) => byName(x, name)?.id).filter((x): x is string => !!x);
     if (ids.length) bs.exitRateIds = ids;
+    // 급부 위험률은 탈퇴 사유에서 정해진다 — 거기서 나오는 것과 다를 때만(일당형 등) 따로 적는다
+    if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) {
+      const id = byName(ev, name)?.id;
+      if (id && id !== eventRate(spec, bs)?.id) bs.rateId = id;
+    }
     spec.benefits.push(bs);
     evidence.push({ path: `benefits[${spec.benefits.length - 1}]`, label: "담보", value: name, raw: raw.slice(0, 160), source: `표 ${ti + 1}`, confidence: "high" });
   };
