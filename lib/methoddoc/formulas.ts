@@ -1,4 +1,4 @@
-import { endAgeLabel, waiverRates, type BenefitSpec, type FormulaSpec, type MethodSpec, type RateRef } from "./spec";
+import { unitNames, unitOf, waiverRates, type BenefitSpec, type FormulaSpec, type MethodSpec, type RateRef } from "./spec";
 
 /**
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
@@ -130,11 +130,8 @@ export function payerModels(spec: MethodSpec): PayerModel[] {
     if (qd && F) { P = "Q′_{x+t}"; lines.push("납입 탈퇴율 — 사망과는 겹치는 부분을 절반으로 보고, 1 을 넘지 않는다", `Q′_{x+t} = min( 1, ${withDeath(qd, F)} )`); }
     const expr = !P ? "1" : lapse ? `1 − ${P} − w_{x+t} + ${P}·w_{x+t}/2` : `1 − ${P}`;
     lines.push("납입자수 — 납입을 멈추게 하는 사유가 생긴 사람을 뺀다", `l′_{x+t+1} = l′_{x+t} × ( ${expr} )`);
-    const note = `보험료 계산에는 납입자수를 ${units.length > 1 ? "계약 단위마다 " : ""}하나만 쓴다 — `
-      + (common.length ? `계약을 끝내는 탈퇴 사유(${common.map(reasonOf).join("·")} — 모든 담보에 공통)` : "모든 담보에 공통인 탈퇴 사유는 없다")
-      + (waivers.length ? `, 납입면제 사유(${waivers.map(reasonOf).join("·")})` : "")
-      + "가 생긴 사람을 뺀다. 별도의 납입면제율을 곱하지 않는다."
-      + (ills.length > 1 ? " 질병끼리는 곱으로, 사망과는 겹치는 부분을 절반으로 결합한다." : "");
+    // 식(제목의 사유 · 기호 · 결합 줄)이 이미 말하는 것은 적지 않는다 — 남는 사실만
+    const note = `보험료(N*)에만 쓰고 ${units.length > 1 ? "계약 단위마다" : "계약 전체에"} 하나다 — 별도의 납입면제율을 곱하지 않는다.`;
     return { id: `p${ui + 1}`, unit, label: crowdLabel("납입자", causes), causes, syms, lapseRate, benefitIdx, legend, lines, note };
   });
 }
@@ -168,10 +165,9 @@ function keepText(syms: { sym: string; rate: RateRef }[], lapseRate: number | un
   else Q = qd || R;
   const keepExpr = !Q ? "1" : lapse ? `1 − ${Q} − w_{x+t} + ${Q}·w_{x+t}/2` : `1 − ${Q}`;
   keepLines.push("유지자수 — 탈퇴 사유가 생긴 사람을 뺀다", `l_{x+t+1} = l_{x+t} × ( ${keepExpr} )`);
-  const reasons = syms.map((x) => reasonOf(x.rate)).join("·");
-  const keepNote = !syms.length ? "탈퇴 사유가 없어 기준 인원이 그대로 유지된다."
-    : `${reasons} 이(가) 생기면 그 담보는 소멸(탈퇴)한다.${!deaths.length ? " 사망은 탈퇴 사유가 아니다 — 사망 시 책임준비금을 지급하므로 질병 발생자만 탈퇴한다." : ""}${ills.length > 1 ? " 질병끼리는 곱으로, 사망과는 겹치는 부분을 절반으로 결합한다." : ""}`;
-  return { legend, lines: keepLines, note: `${keepNote} 보험금의 현가와 유지자수의 현가 D·N(납입 후 유지비 · 책임준비금)은 이 l 을 쓴다.` };
+  const note = !syms.length ? "탈퇴 사유가 없어 기준 인원이 그대로 유지된다."
+    : !deaths.length ? "사망은 탈퇴 사유가 아니다 — 사망 시 책임준비금을 지급하므로 질병 발생자만 탈퇴한다." : "";
+  return { legend, lines: keepLines, note };
 }
 
 // ── 담보 ────────────────────────────────────────────────────────────────────
@@ -266,9 +262,7 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
       lines.push("생존 지급 시점의 배수", `E_t = ${b.points!.map((p) => `if( t = ${p.age} − x, ${p.multiple}, 0 )`).join(" + ")}`,
         "보험금 현가 (PVB) — 보장금액 1원당", "PVB = M_x + Σ_{u=0}^{n} E_u·D_{x+u}");
     } else lines.push("보험금 현가 (PVB) — 보장금액 1원당", "PVB = M_x");
-    const note = b.role === "death" && group.exits.length > 1
-      ? `${group.exits.map(reasonOf).join("·")} 모두 같은 보험금을 지급하므로 탈퇴자 전부가 급부 대상이다.`
-      : b.role === "incidence" ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
+    const note = b.role === "incidence" ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
     return { idx, b, group, payer, event, legend, lines, payout, ...(note ? { note } : {}) };
   });
 }
@@ -306,6 +300,9 @@ export function commonModels(spec: MethodSpec): { key: string; section: string; 
   ];
 }
 
+/** 담보 칸 — 보험금의 현가 식과 산출방법서 담보 표가 이 칸들에 기댄다 */
+export const BENEFIT_FIELDS = ["name", "unit", "role", "endAge", "multiple", "amount", "waitDays", "waitPayRatio", "exitRateIds", "rateId"] as const;
+
 // ── 산출방법서에 실을 식 ─────────────────────────────────────────────────────
 export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   const out: FormulaSpec[] = [];
@@ -314,17 +311,20 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   const idx = (r: RateRef) => `rates[${spec.rates.indexOf(r)}]`;
   const groups = groupModels(spec);
   const multi = spec.benefits.length > 1;
-  const benefits = benefitModels(spec);
+  // 싣는 차례 — 계약 단위(주계약 → 특약 순) 안에서 조건의 담보 순서. 담보를 더하면 그 단위의 끝에 붙는다
+  const units = unitNames(spec);
+  const rank = (i: number) => units.indexOf(unitOf(spec.benefits[i])) * 1e4 + i;
+  const benefits = benefitModels(spec).sort((a, b) => rank(a.idx) - rank(b.idx));
 
   // 라. 유지자수·납입자수 — 유지자 집단마다 l(보장 카드), 납입자는 계약 단위마다 하나 l′(보험료 카드)
-  for (const g of groups) {
-    const bens = g.benefitIdx.map((i) => `benefits[${i}]`), exits = g.exits.map(idx);
+  for (const g of [...groups].sort((a, b) => Math.min(...a.benefitIdx.map(rank)) - Math.min(...b.benefitIdx.map(rank)))) {
+    const bens = g.benefitIdx.map((i) => `benefits[${i}].exitRateIds`), exits = g.exits.map(idx);
     out.push({
       section: "유지자수·납입자수", key: `group:${g.id}`,
       path: [...bens, ...exits, ...(lapse ? ["basis.lapse"] : [])].join("|"),
       label: `유지자수 — ${g.label}`,
       text: [...g.keep.legend, "", ...g.keep.lines].join("\n"),
-      note: `${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")} 담보가 이 유지자수를 쓴다. ${g.keep.note}`,
+      note: `${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")} 담보가 쓴다.${g.keep.note ? ` ${g.keep.note}` : ""}`,
     });
   }
   const payers = payerModels(spec);
@@ -332,7 +332,7 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
     out.push({
       section: "유지자수·납입자수", key: `pay:${p.id}`,
       // 이 단위의 담보 + 줄이는 사유 + (있으면) 납입면제·해지율 — 어느 조건을 골라도 이 식이 표시되게
-      path: [...p.benefitIdx.map((i) => `benefits[${i}]`), ...p.causes.map(idx),
+      path: [...p.benefitIdx.map((i) => `benefits[${i}].exitRateIds`), ...p.causes.map(idx),
         ...(spec.basis.waiver ? ["basis.waiver", ...(spec.basis.waiverRateIds?.length ? ["basis.waiverRateIds"] : [])] : []), ...(lapse ? ["basis.lapse"] : [])].join("|"),
       label: `납입자수 — ${payers.length > 1 ? `${p.unit} ` : ""}${p.label}`,
       text: [...p.legend, ...(p.legend.length ? [""] : []), ...p.lines].join("\n"),
@@ -350,10 +350,12 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   for (const m of benefits) {
     out.push({
       section: "계산기수 — 보험금", key: `benefit:${m.b.id}`,
-      path: [`benefits[${m.idx}]`, ...(m.event && !m.group.syms.includes(m.event) ? [idx(m.event.rate)] : [])].join("|"),
+      // 담보 칸마다(이름·유형·보험기간·배수·면책·탈퇴 사유·급부 위험률) — 그 칸을 고르면 이 식이 비친다
+      path: [...BENEFIT_FIELDS.map((k) => `benefits[${m.idx}].${k}`), ...(m.event && !m.group.syms.includes(m.event) ? [idx(m.event.rate)] : [])].join("|"),
       label: `보험금의 현가 — ${multi ? `${m.b.unit ? `${m.b.unit} ` : ""}${m.b.name}` : m.b.name}`,
       text: [...m.legend, ...(m.legend.length ? [""] : []), ...m.lines].join("\n"),
-      note: [`보장금액 ${amountLabel(m.b)}${m.b.endAge ? ` · ${endAgeLabel(m.b.endAge)}` : ""} · 면책·삭감 ${waitLabel(m.b)} · ${m.group.label}.`, m.note].filter(Boolean).join(" "),
+      // 보장금액·보험기간·면책은 바로 위 담보 표에 있다 — 되풀이하지 않는다
+      ...(m.note ? { note: m.note } : {}),
     });
   }
   common.filter((c) => c.key.startsWith("premium:")).forEach(put);
@@ -381,10 +383,10 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
       `V_t = [ M_{x+t}${survival ? " + Σ_{u>t} E_u·D_{x+u}" : ""}${low ? " + CSV_t" : ""} + β′·( N_{x+max(t,m)} − N_{x+n} ) − P_β·( N′_{x+t} − N′_{x+m} )·[t≤m] ] / D_{x+t}`,
       "10만원당 책임준비금 — 원 단위로 반올림",
       "V^{10만}_t = round( V_t × 100,000 )",
-      ...(spec.basis.standardInterest !== undefined ? ["회계연도말 보험료적립금 — 적용기초율과 표준기초율(V^{표준}) 책임준비금 중 큰 금액", "V^{결산}_t = max( V_t, V^{표준}_t )"] : [])].join("\n"),
+      ...(spec.basis.standardInterest !== undefined ? ["회계연도말 보험료적립금 — 둘 중 큰 금액", "V^{결산}_t = max( V_t, V^{표준}_t )"] : [])].join("\n"),
       note: "순보식에 납입 후 유지비 β′를 더한 형태. [t≤m] 은 납입기간 중이면 1, 아니면 0 이다. 표준준비금은 표준이율로 같은 식을 계산한다." },
     { section: S, key: "surrender:alpha", label: "해약공제 기준 신계약비", path: "surrender",
-      text: (meth ? ["적용기초율의 신계약비와 표준기초율의 신계약비 중 작은 쪽", "α^{공제} = min( α_S + α_P·round₅( P_base ), α^{표준} )"] : ["α^{공제} = α"]).join("\n"),
+      text: meth ? "α^{공제} = min( α_S + α_P·round₅( P_base ), α^{표준} )" : "α^{공제} = α",
       ...(meth ? { note: "α^{표준} : 표준이율로 같은 식(P_base)을 계산해 구한 신계약비. 영업보험료 G 에는 반올림 전 P_base 를 쓴다." } : {}) },
     { section: S, key: "surrender:deduct", label: "해약공제", path: "surrender",
       text: [`납입기간과 ${dy}년 중 짧은 기간에 걸쳐 매년 균등하게 줄어든다`, `해약공제_t = α^{공제} · max( min(m,${dy}) − t, 0 ) / min(m,${dy})`].join("\n") },

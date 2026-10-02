@@ -337,7 +337,9 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       spec.basis.waiverRateIds = ids.length ? ids : undefined;
       add("basis.waiverRateIds", "납입면제 사유", ids.join(", ") || "없음", fx.slice(0, 120), "표준 양식 가.(4)", "high", false);
     }
-    readStandard(paragraphs, spec, evidence, format!);
+    // v6 은 담보 표가 식 사이(보험금의 현가 바로 위)에 있다 — 글로 뽑힌 표의 행이 앞 식의 줄로 이어지지 않게 지운다(표는 앞에서 읽었다)
+    const tableRows = new Set(doc.tables.flatMap((t) => [t.head, ...t.rows].map((r) => squeeze(r.filter(Boolean).join(" ")))));
+    readStandard(paragraphs.map((p) => (tableRows.has(squeeze(p)) ? "" : p)), spec, evidence, format!);
   } else spec.sections = outlineSections(doc);
 
   const missing = ["meta.productName", "basis.interest"]
@@ -401,6 +403,15 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
       continue;
     }
     const note = t.startsWith(NOTE_MARK) ? t.slice(NOTE_MARK.length).trim() : null;
+    // 담보의 연령 구간·생존급부 — v6 은 담보 표가 식들 사이에 있다. 앞 식의 ※ 덧붙임으로 빨려 들지 않게 먼저 본다
+    const stepNote = note !== null ? /^(.+?):\s*(연령 구간 배수|생존급부)\s+(.+)$/.exec(note) : null;
+    const stepBen = stepNote ? spec.benefits.find((x) => x.name === stepNote[1].trim()) : undefined;
+    if (stepNote && stepBen) {
+      flush();
+      if (stepNote[2] === "연령 구간 배수") stepBen.steps = [...stepNote[3].matchAll(/(\d+)\s*~\s*(\d+)\s*세\s*([\d.]+)\s*배/g)].map((x) => ({ fromAge: +x[1], toAge: +x[2], multiple: +x[3] }));
+      else stepBen.points = [...stepNote[3].matchAll(/(\d+)\s*세\s*([\d.]+)\s*배/g)].map((x) => ({ age: +x[1], multiple: +x[2] }));
+      continue;
+    }
     if (cur) {
       if (note !== null) { cur.note = cur.note ? `${cur.note} ${note}` : note; continue; }
       // Word 는 긴 식을 여러 줄로 나눈다(wrapEquation) — 연산자로 시작하는 줄은 앞줄의 이어짐이다
@@ -415,21 +426,20 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
       if (dy) spec.surrender.deductionYears = Number(dy[1]);
       else surrender.push(body);
     } else if (extra) extra.paragraphs.push(t);
-    else if (note !== null) {
-      const m = /^(.+?):\s*(연령 구간 배수|생존급부)\s+(.+)$/.exec(note);
-      const b = m ? spec.benefits.find((x) => x.name === m[1].trim()) : undefined;
-      if (m && b && m[2] === "연령 구간 배수") {
-        b.steps = [...m[3].matchAll(/(\d+)\s*~\s*(\d+)\s*세\s*([\d.]+)\s*배/g)].map((x) => ({ fromAge: +x[1], toAge: +x[2], multiple: +x[3] }));
-      } else if (m && b) b.points = [...m[3].matchAll(/(\d+)\s*세\s*([\d.]+)\s*배/g)].map((x) => ({ age: +x[1], multiple: +x[2] }));
-    }
   }
   flush();
+  // v6: 해약공제 기간은 해약공제 식의 min(m, N) 이 정한다(따로 적던 ※ 문장이 없다) — 식 비교 전에 읽어 자동 식과 맞춘다
+  const dyF = read.find((f) => f.label === "해약공제")?.lines.map((l) => /min\(\s*m\s*,\s*(\d+)\s*\)/.exec(l)).find(Boolean);
+  if (dyF && spec.surrender.deductionYears === undefined) spec.surrender.deductionYears = Number(dyF[1]);
   spec.reserve.notes = reserve;
   spec.surrender.notes = surrender;
   spec.sections = extras.filter((s) => s.paragraphs.length);
   // 자동으로 만든 식(조건에서 늘 다시 만든다)과 같은 것은 빼고, 고친 식·새 식만 조건의 식으로 둔다
   const auto = generateFormulas(spec);
   const same = (a?: string, b?: string) => normFormula(a ?? "") === normFormula(b ?? "");
+  //  v5 → v6: 식 줄은 같고 설명 줄·※ 덧붙임만 줄었다 — v5 문서는 "=" 가 든 식 줄만 견준다(설명만 다른 것은 고친 식이 아니다)
+  const v5 = /v5\s*$/.test(format);
+  const eqs = (x?: string) => (x ?? "").split("\n").filter((l) => l.includes("=")).join("\n");
   // 옛 판의 자동 식은 지금 판에서 나뉘거나 이름이 바뀌었다 — 그 제목은 건너뛰고(사람이 고친 것인지 알 수 없다), 사람이 더한 식만 둔다
   //  v1 → v2: 계산기수가 나뉘고 기호가 바뀌었다(mm → k, 발생률 k → r)
   //  v2 → v3: 계산기수가 "보험료의 현가"·"보험금의 현가" 로 나뉘고, 유지자수·납입자수는 담보가 아니라 집단마다 적는다
@@ -447,6 +457,7 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
     // v3 → v4 는 절 이름만 바뀌었다(제목은 그대로) — 절 이름을 지금 것으로 옮겨 자동 식과 맞춘다
     if (v3) { const a0 = auto.find((x) => x.label === f.label); if (a0) f.section = a0.section; }
     const a = auto.find((x) => x.section === f.section && x.label === f.label);
+    if (v5) return !a || !same(eqs(a.text), eqs(f.lines.join("\n")));
     return !a || !same(a.text, f.lines.join("\n")) || !same(a.note, f.note);
   }).map(({ lines, ...f }) => ({ ...f, text: lines.join("\n") }));
   const push = (path: string, label: string, value: string) =>

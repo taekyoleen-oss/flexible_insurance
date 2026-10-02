@@ -1,4 +1,4 @@
-import { amountLabel, eventCauses, eventRate, groupModels, payerModels, waitLabel } from "./formulas";
+import { amountLabel, eventRate, groupModels, payerModels, waitLabel } from "./formulas";
 import { endAgeLabel, hasContract, hasProduct, RATE_ROLE_LABEL, waiverRates, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
@@ -40,11 +40,17 @@ const yearsOf = (y?: number, a?: number) => (y ? `${y}년` : a ? `${a}세 만기
  *  v5 (2026-10-01): 담보 표가 실무 모양 — 보험기간(종료 나이) · 보장금액은 **가입금액의 배수**(1배 · 0.5배) · 면책·삭감(기간과 지급 비율).
  *     라. 는 집단마다 유지자수(l)와 납입자수(l′) 두 덩이, 마. 는 납입자수 쪽(D′ · N′ · N*), 바. 는 유지자수 쪽(D · N)과 담보의 S · C · M · PVB.
  *     사. 에 1원당 반올림(G₁ = round₆) → 10만원당(G_{10만}). 2·3 장의 준비금·환급금 식은 모두 계산할 수 있는 식이다(V · P_β · 해약공제 · W · 환급률).
+ *  v6 (2026-10-02): 되풀이를 걷어 낸다 — "나. 보장 내용" 절이 없어지고 담보 표가 그 담보의 "보험금의 현가" 식 바로 위에 실린다
+ *     (집단 행·급부 위험률 행(따로 정한 일당형만 남김)·유지자수 집단 덧붙임 없음). 계약 단위 표·시산 기준은 개요로.
+ *     1장 = 가. 예정기초율 · 나. 기호의 정의 · 다. 유지자수·납입자수 · 라. 계산기수 — 보험료 · 마. 계산기수 — 보험금(담보 표 + 식) ·
+ *     바. 순보험료 및 영업보험료. 가.(4) 는 사유와 f_x 줄만(결합은 납입자수 식에). 식의 설명·덧붙임은 식 줄이 이미 말하는 것을 되풀이하지 않는다.
+ *     해약공제 기간은 해약공제 식의 min(m, N) 에서 읽는다(따로 적던 ※ 문장 없음).
  */
-export const STANDARD_FORMAT = "표준 산출방법서 v5";
+export const STANDARD_FORMAT = "표준 산출방법서 v6";
 
 /** 1장 안의 소제목 차례 — 실무 산출방법서의 "가. 예정기초율 … 사. 순보험료 및 영업보험료" */
-const PREMIUM_SUBS = ["유지자수·납입자수", "계산기수 — 보험료", "계산기수 — 보험금", "순보험료 및 영업보험료"];
+const BENEFIT_SUB = "계산기수 — 보험금";
+const PREMIUM_SUBS = ["유지자수·납입자수", "계산기수 — 보험료", BENEFIT_SUB, "순보험료 및 영업보험료"];
 const RESERVE = "책임준비금의 계산에 관한 사항";
 const SURRENDER = "해지환급금의 계산에 관한 사항";
 
@@ -121,7 +127,7 @@ function productBlocks(p: ProductInfo, withContract: boolean): DocBlock[] {
       p.terms.map((r, i) => [[...(label ? [r.label ?? "—"] : []), r.term || "—", r.pay || "—", r.age || "—", ...(female ? [r.ageF || r.age || "—"] : [])], `product.terms[${i}]`])));
   }
   out.push({ t: "note", path: "product", text: withContract
-    ? "가입 조건은 판매 범위를 적은 정보이며, 보험료·책임준비금 예시는 나. 의 시산 기준으로 계산한다."
+    ? "가입 조건은 판매 범위를 적은 정보이며, 보험료·책임준비금 예시는 아래 시산 기준으로 계산한다."
     : "가입 조건은 판매 범위를 적은 정보이다. 보험료는 이 범위 안의 계약(피보험자·보험기간·납입기간)마다 계산한다." });
   return out;
 }
@@ -135,7 +141,6 @@ function symbolBlocks(spec: MethodSpec, groups: ReturnType<typeof groupModels>):
   const one = groups.length === 1 ? groups[0] : undefined;
   const reasons = (g: (typeof groups)[number]) => g.exits.map((r) => r.name.replace(/\s*(발생)?[율률]\s*$/, "")).join(" · ") || "탈퇴 사유";
   const payers = payerModels(spec);
-  const names = (idx: number[]) => idx.map((k) => spec.benefits[k]?.name).filter(Boolean).join(" · ");
   const rows: [string, string][] = [
     ["x", "피보험자의 가입나이"],
     ["t", "경과기간(년), 0 ≤ t < n"],
@@ -145,14 +150,12 @@ function symbolBlocks(spec: MethodSpec, groups: ReturnType<typeof groupModels>):
     ["i", "적용이율 (가.(1))"],
     ["v", "현가율 = 1/(1+i)"],
     ["l_{x+t}", `t시점 생존자수 (기준 인원 l_x = 100,000) — ${one ? `${reasons(one)} 가 생기지 않은 사람 수` : "그 집단의 탈퇴 사유가 생기지 않은 사람 수"}`],
-    ["l′_{x+t}", `t시점 납입자수 (기준 인원 l′_x = 100,000) — 보험료(N*)에 쓰고 ${payers.length > 1 ? "계약 단위마다" : "계약 전체에"} 하나다. 계약을 끝내는 탈퇴 사유와 납입면제 사유가 생기지 않은 사람 수`],
-    ...(groups.length > 1 ? groups.map((g): [string, string] => [g.label, `l — ${names(g.benefitIdx)} 담보의 보험금 현가와 D·N 에 쓴다`]) : []),
-    ...payers.map((p): [string, string] => [p.label, `l′ — ${payers.length > 1 ? `${p.unit} ` : ""}보험료(N*)에 쓴다 (${names(p.benefitIdx)})`]),
-    ["d_{x+t}", "t시점 지급자수 — 그 담보의 급부가 생긴 사람 수 (바. 의 C 식에 들어간다)"],
-    ["S_t", "t년도 보장금액의 배수 — 면책·삭감(기간과 지급 비율)을 반영한다(바.). 보장금액 = 보험가입금액 × 담보의 배수"],
+    // 유지자·납입자 집단 이름은 유지자수·납입자수 식의 제목이 정의한다 — 여기서 되풀이하지 않는다
+    ["l′_{x+t}", `t시점 납입자수 (기준 인원 l′_x = 100,000) — 탈퇴·납입면제 사유가 생기지 않은 사람 수. 보험료(N*)에 쓰고 ${payers.length > 1 ? "계약 단위마다" : "계약 전체에"} 하나다`],
+    ["S_t", "t년도 보장금액의 배수 — 면책·삭감을 반영한다. 보장금액 = 보험가입금액 × 담보의 배수"],
     ["V_t", "t년도 말 책임준비금 (보장금액 1원당, 2.)"],
     ["W_t", "t년도 말 해지환급금 (보장금액 1원당, 3.)"],
-    ...(spec.basis.waiver && waiverRates(spec).length ? [["f_{x+t}", "납입을 멈추게 하는 질병(납입면제 사유 등)의 발생률 — 납입자수 식 (라.)"] as [string, string]] : []),
+    ...(spec.basis.waiver && waiverRates(spec).length ? [["f_{x+t}", "납입을 멈추게 하는 질병(납입면제 사유 등)의 발생률 — 납입자수 식"] as [string, string]] : []),
     ...(lapse ? [["w_{x+t}", "적용해지율 (가.(3))"] as [string, string]] : []),
     ...(lapse && spec.basis.lowRatio !== undefined ? [["ρ", "납입기간 중 해지환급금 비율 (가.(3) — 무해지 0)"] as [string, string]] : []),
   ];
@@ -204,7 +207,8 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       RATE_ROLE_LABEL[r.role],
       r.source ?? "—",
       tableNote(r),
-    ], `rates[${i}]`])));
+      // rate:<id> — 보장 카드에서 담보의 위험률을 고르면 이 행만 비친다(rates[i] 는 그 위험률을 쓰는 식까지 모두 비춘다)
+    ], `rates[${i}]|rate:${r.id}`])));
   } else {
     basisBlocks.push({ t: "p", text: "위험률이 지정되지 않았습니다.", path: "rates" });
   }
@@ -221,66 +225,66 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   basisBlocks.push({ t: "p", text: "(4) 납입면제 사유", path: "basis.waiver" });
   const wr = waiverRates(spec);
   if (spec.basis.waiver && wr.length) {
+    // 결합(F · Q′)은 유지자수·납입자수의 납입자수 식에 있다 — 여기에는 사유만
     basisBlocks.push({ t: "p", path: "basis.waiver|basis.waiverRateIds", text:
-      `납입면제 사유는 ${wr.map((r) => r.name).join(" · ")} 이다. 이 사유가 생기면 보장은 그대로 두고 남은 보험료만 면제하므로, 납입자수 l′ 에서만 뺀다.` });
-    basisBlocks.push({ t: "p", path: "basis.waiver|basis.waiverRateIds", text:
-      "납입자수는 보험료 계산에 하나만 쓴다 — 계약을 끝내는 탈퇴 사유(모든 담보에 공통, 보통 사망)와 이 납입면제 사유로 준다(라. 유지자수·납입자수)." });
-    // 첫 줄의 "f_x : A · B" 는 되읽을 때 납입면제 사유를 알아보는 표시다(담보별 식의 f 줄은 "—" 가 붙어 다르다)
-    basisBlocks.push({ t: "formula", path: "basis.waiver|basis.waiverRateIds", text: [
-      `f_x : ${wr.map((r) => r.name).join(" · ")}`,
-      `f_{x+t} : 납입을 멈추게 하는 질병의 발생률 — 납입면제 사유(와 모든 담보에 공통인 질병 탈퇴 사유)`,
-      // 결합 규칙 — 질병끼리는 곱, 사망과는 겹치는 부분을 절반(라. 의 납입자수 식)
-      "F_{x+t} = 1 − ( 1 − f^{(1)}_{x+t} )·( 1 − f^{(2)}_{x+t} )… — 질병끼리는 따로 생긴다고 보고 곱으로",
-      "Q′_{x+t} = q_{x+t} + F_{x+t} − q_{x+t}·F_{x+t}/2 — 사망과는 겹치는 부분을 절반으로",
-    ].join("\n") });
+      `납입면제 사유는 ${wr.map((r) => r.name).join(" · ")} 이다. 보장은 그대로 두고 남은 보험료만 면제하므로 납입자수 l′ 에서만 뺀다(유지자수·납입자수).` });
+    // "f_x : A · B" 는 되읽을 때 납입면제 사유를 알아보는 표시다(담보별 식의 f 줄은 "—" 가 붙어 다르다)
+    basisBlocks.push({ t: "formula", path: "basis.waiver|basis.waiverRateIds", text: `f_x : ${wr.map((r) => r.name).join(" · ")}` });
   } else {
     basisBlocks.push({ t: "p", path: "basis.waiver", text: spec.basis.waiver
       ? "납입면제를 적용하나 위험률이 지정되지 않았습니다."
-      : "별도의 납입면제율을 두지 않는다(f = 0). 납입자수 l′ 는 각 담보의 탈퇴 사유로 유지자수 l 과 똑같이 줄어든다(라. 유지자수·납입자수)." });
+      : "별도의 납입면제율을 두지 않는다(f = 0). 납입자수 l′ 는 모든 담보에 공통인 탈퇴 사유로만 준다(유지자수·납입자수)." });
   }
   basisBlocks.push({ t: "p", text: "(5) 예정사업비율", path: "expenses" });
   basisBlocks.push(spec.expenses.length
     ? table(["구분", "기호", "기준", "적용사업비율"], spec.expenses.map((e, i) => [[
         e.group + (e.phase ? ` (${e.phase})` : ""), e.symbol || "—", e.basis, expenseRate(e)], `expenses[${i}]`]))
     : { t: "p", text: "사업비가 지정되지 않았습니다.", path: "expenses" });
-  // 나. 보장 내용 — 담보 표
-  const unitBlocks: DocBlock[] = [];
+  // 계약 단위 · 시산 기준 — 계약에 관한 정보라 개요에 둔다(보험료 식과 섞지 않는다)
   if (spec.units.length > 1) {
-    unitBlocks.push({ t: "p", path: "units", text: "주계약과 특약을 따로 산출하고 합친다. 특약은 주계약 조건을 물려받고, 아래 표의 '주계약과 다른 조건'만 달리 적용한다." });
-    unitBlocks.push(table(["구분", "이름", "담보", "주계약과 다른 조건"], spec.units.map((u, i) => [[
-      u.main ? "주계약" : "특약", u.name,
-      u.benefitIds.map((id) => spec.benefits.find((b) => b.id === id)?.name ?? id).join(", "),
-      Object.keys(u.overrides ?? {}).length ? Object.keys(u.overrides ?? {}).join(", ") : "— (모두 상속)",
-    ], `units[${i}]`])));
+    out[0].blocks.push({ t: "p", path: "units", text: "주계약과 특약을 따로 산출하고 합친다. 특약은 주계약 조건을 물려받고, 아래 표의 '주계약과 다른 조건'만 달리 적용한다." },
+      table(["구분", "이름", "담보", "주계약과 다른 조건"], spec.units.map((u, i) => [[
+        u.main ? "주계약" : "특약", u.name,
+        u.benefitIds.map((id) => spec.benefits.find((b) => b.id === id)?.name ?? id).join(", "),
+        Object.keys(u.overrides ?? {}).length ? Object.keys(u.overrides ?? {}).join(", ") : "— (모두 상속)",
+      ], `units[${i}]`])));
   }
-  // 탈퇴 사유가 같은 담보는 유지자수가 똑같다 — 그 집단 이름을 담보마다 적어 라. 의 식과 이어 준다
+  // 시산 기준은 계산하는 앱이 채웠을 때만 — 산출방법서를 읽은 조건에는 없다
+  if (hasContract(spec.contract)) {
+    out[0].blocks.push({ t: "p", path: "contract", text: "시산 기준 — 보험료·책임준비금 예시는 아래 계약으로 계산한다." }, table(["항목", "내용"], [
+      [["피보험자", `${spec.contract.age ?? "—"}세 ${spec.contract.sex === "F" ? "여" : spec.contract.sex === "M" ? "남" : ""}`], "contract.age|contract.sex"],
+      [["보험기간", yearsOf(spec.contract.termYears, spec.contract.termAge)], "contract.termYears|contract.termAge"],
+      [["보험료 납입기간", yearsOf(spec.contract.payYears, spec.contract.payAge)], "contract.payYears|contract.payAge"],
+      [["납입주기", spec.contract.freq ? (spec.contract.freq === 12 ? "월납" : spec.contract.freq === 1 ? "연납" : `연 ${spec.contract.freq}회`) : "—"], "contract.freq"],
+      ...(spec.contract.sumAssured ? [[["보험가입금액", wonOf(spec.contract.sumAssured)], "contract.sumAssured"] as [string[], string]] : []),
+    ]));
+  }
+  // 담보 표 — 따로 절을 두지 않고 그 담보의 "보험금의 현가" 식 바로 위에 싣는다(보장 내용과 보험금 식이 한 자리에).
+  // 행마다 그 조건 칸의 경로 — 조건에서 보장금액을 고르면 이 표의 보장금액 행과 그 식만 비친다
   const groups = groupModels(spec);
-  if (groups.length) {
-    unitBlocks.push({ t: "note", path: groups.flatMap((g) => g.benefitIdx.map((i) => `benefits[${i}]`)).join("|"),
-      text: `유지자수 집단 ${groups.length}개 — ${groups.map((g) => `${g.label}(${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")})`).join(", ")}. 유지자수 l 은 집단마다, 납입자수 l′ 는 ${payerModels(spec).map((p) => p.label).join(" · ")} 하나로 라. 에서 낸다. 보장금액은 보험가입금액 × 배수이고, 보험료·준비금은 보장금액 1원당으로 낸 뒤 맨 뒤에서 곱한다.` });
-  }
-  spec.benefits.forEach((b, i) => {
-    const ev = eventRate(spec, b);
-    unitBlocks.push(table(["담보", b.name], ([
+  const benefitTable = (b: (typeof spec.benefits)[number], i: number): DocBlock[] => {
+    const at = (...k: string[]) => [...k.map((x) => `benefits[${i}].${x}`), `formula:benefit.${b.id}`].join("|");
+    const rows: [string[], string][] = [
       // 계약 단위는 특약이 있을 때만(주계약뿐이면 적지 않는다)
-      ...(b.unit ? [["단위", b.unit] as [string, string]] : []),
-      ["급부 유형", RATE_ROLE_LABEL[b.role]],
+      ...(b.unit ? [[["단위", b.unit], at("unit", "name")] as [string[], string]] : []),
+      [["급부 유형", RATE_ROLE_LABEL[b.role]], at("role", ...(b.unit ? [] : ["name"]))],
       // 지급 사유는 담보 이름과 겹치기 쉬워 따로 적었을 때만 싣는다
-      ...(b.trigger ? [["지급 사유", b.trigger] as [string, string]] : []),
-      ["보험기간", endAgeLabel(b.endAge)],
-      ["보장금액", amountLabel(b)],
-      ["면책·삭감", waitLabel(b)],
-      // 급부 위험률은 탈퇴 사유(집단)에서 정해진다 — 사망형은 탈퇴 사유 전부, 진단형은 그 가운데 사망이 아닌 것
-      ["급부 위험률", b.role === "death" ? "탈퇴 사유 전부" : ev?.name ?? (eventCauses(spec, b).length > 1 ? `사망 외 탈퇴 사유 전부 (${eventCauses(spec, b).map((r) => r.name).join(" · ")})` : "—")],
-      ["탈퇴 위험률", (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—"],
-      ["집단", groups.find((g) => g.benefitIdx.includes(i))?.label ?? "—"],
-    ] as [string, string][]).map((row) => [row, `benefits[${i}]`])));
-  });
-  spec.benefits.forEach((b, i) => {
-    if (b.steps?.length) unitBlocks.push({ t: "note", path: `benefits[${i}].steps`, text: `${b.name}: 연령 구간 배수 ${b.steps.map((x) => `${x.fromAge}~${x.toAge}세 ${x.multiple}배`).join(" · ")}` });
-    if (b.points?.length) unitBlocks.push({ t: "note", path: `benefits[${i}].points`, text: `${b.name}: 생존급부 ${b.points.map((x) => `${x.age}세 ${x.multiple}배`).join(" · ")}` });
-  });
-  // 식은 절(section)별로 묶는다 — 앞 넷은 1장의 라~사, 준비금·환급금은 2·3장
+      ...(b.trigger ? [[["지급 사유", b.trigger], at("trigger")] as [string[], string]] : []),
+      [["보험기간", endAgeLabel(b.endAge)], at("endAge")],
+      [["보장금액", amountLabel(b)], at("multiple", "amount")],
+      [["면책·삭감", waitLabel(b)], at("waitDays", "waitPayRatio")],
+      // 급부 위험률은 탈퇴 사유에서 정해진다(사망형은 전부, 진단형은 사망이 아닌 것) — 따로 정한 것(일당형)만 싣는다
+      ...(b.rateId && b.rateId !== eventRate(spec, { ...b, rateId: undefined })?.id ? [[["급부 위험률", rateName(b.rateId)], at("rateId")] as [string[], string]] : []),
+      [["탈퇴 위험률", (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—"], at("exitRateIds")],
+    ];
+    return [
+      table(["담보", b.name], rows),
+      ...(b.steps?.length ? [{ t: "note" as const, path: `benefits[${i}].steps`, text: `${b.name}: 연령 구간 배수 ${b.steps.map((x) => `${x.fromAge}~${x.toAge}세 ${x.multiple}배`).join(" · ")}` }] : []),
+      ...(b.points?.length ? [{ t: "note" as const, path: `benefits[${i}].points`, text: `${b.name}: 생존급부 ${b.points.map((x) => `${x.age}세 ${x.multiple}배`).join(" · ")}` }] : []),
+    ];
+  };
+  const placed = new Set<string>();
+  // 식은 절(section)별로 묶는다 — 1장의 소제목들, 준비금·환급금은 2·3장
   const bySection = new Map<string, typeof spec.formulas>();
   for (const f of spec.formulas) {
     const list = bySection.get(f.section) ?? [];
@@ -291,7 +295,10 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     // 조건 경로에 식의 짝(formula:pv.N)도 단다 — 조건 카드가 자기 식 덩이만 정확히 짚을 수 있게.
     // 조건 파일의 줄이 아니므로 줄 짝짓기(linesOfPaths)는 그냥 지나간다
     const path = [f.path, f.key ? `formula:${f.key.replace(/:/g, ".")}` : ""].filter(Boolean).join("|") || undefined;
+    const bi = f.key?.startsWith("benefit:") ? spec.benefits.findIndex((b) => `benefit:${b.id}` === f.key) : -1;
+    if (bi >= 0) placed.add(spec.benefits[bi].id);
     return [
+      ...(bi >= 0 ? benefitTable(spec.benefits[bi], bi) : []),
       { t: "p" as const, text: f.label, path, kind: "label" as const },
       { t: "formula" as const, text: f.text, path },
       ...(f.note ? [{ t: "note" as const, text: f.note, path }] : []),
@@ -299,22 +306,13 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   });
   const take = (name: string) => { const l = bySection.get(name); bySection.delete(name); return l; };
 
-  basisBlocks.push(sub("보장 내용", "benefits"));
-  // 시산 기준은 계산하는 앱이 채웠을 때만 — 산출방법서를 읽은 조건에는 없다
-  if (hasContract(spec.contract)) {
-    basisBlocks.push({ t: "p", path: "contract", text: "시산 기준 — 보험료·책임준비금 예시는 아래 계약으로 계산한다." }, table(["항목", "내용"], [
-      [["피보험자", `${spec.contract.age ?? "—"}세 ${spec.contract.sex === "F" ? "여" : spec.contract.sex === "M" ? "남" : ""}`], "contract.age|contract.sex"],
-      [["보험기간", yearsOf(spec.contract.termYears, spec.contract.termAge)], "contract.termYears|contract.termAge"],
-      [["보험료 납입기간", yearsOf(spec.contract.payYears, spec.contract.payAge)], "contract.payYears|contract.payAge"],
-      [["납입주기", spec.contract.freq ? (spec.contract.freq === 12 ? "월납" : spec.contract.freq === 1 ? "연납" : `연 ${spec.contract.freq}회`) : "—"], "contract.freq"],
-      ...(spec.contract.sumAssured ? [[["보험가입금액", wonOf(spec.contract.sumAssured)], "contract.sumAssured"] as [string[], string]] : []),
-    ]));
-  }
-  basisBlocks.push(...unitBlocks);
   if (spec.formulas.length) basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec, groups));
   for (const name of PREMIUM_SUBS) {
-    const list = take(name);
-    if (list?.length) basisBlocks.push(sub(name), ...formulaBlocks(list));
+    const list = take(name) ?? [];
+    const blocks = formulaBlocks(list);
+    // 식이 없는 담보(식을 아직 만들지 않은 조건)의 표는 보험금 절 앞에 — 보장 내용이 빠지지 않게
+    if (name === BENEFIT_SUB) blocks.unshift(...spec.benefits.flatMap((b, i) => (placed.has(b.id) ? [] : benefitTable(b, i))));
+    if (blocks.length) basisBlocks.push(sub(name), ...blocks);
   }
   out.push({ id: "premium", title: "1. 보험료의 계산에 관한 사항", blocks: basisBlocks });
 
@@ -322,11 +320,8 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   let no = 2;
   for (const [name, notes, path] of [[RESERVE, spec.reserve.notes, "reserve"], [SURRENDER, spec.surrender.notes, "surrender"]] as const) {
     const list = take(name) ?? [];
-    const extra: DocBlock[] = [
-      ...(name === SURRENDER && spec.surrender.deductionYears
-        ? [{ t: "note" as const, path: "surrender.deductionYears", text: `해약공제는 납입기간과 ${spec.surrender.deductionYears}년 중 짧은 기간에 걸쳐 매년 균등하게 줄어든다.` }] : []),
-      ...notes.map((t, i) => ({ t: "note" as const, text: t, path: `${path}.notes[${i}]` })),
-    ];
+    // 해약공제 기간은 해약공제 식(min(m, N))과 그 설명 줄이 말한다 — 따로 문장을 두지 않는다
+    const extra: DocBlock[] = notes.map((t, i) => ({ t: "note" as const, text: t, path: `${path}.notes[${i}]` }));
     // 관련 사항(글)을 먼저, 식을 나중에 — 실무 문서의 차례이고, 되읽을 때도 글이 식의 ※ 덧붙임으로 붙지 않는다
     if (list.length || extra.length) out.push({ id: path, title: `${no++}. ${name}`, blocks: [...extra, ...formulaBlocks(list)] });
   }
