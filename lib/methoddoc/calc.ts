@@ -469,12 +469,17 @@ function buildModel(spec: MethodSpec, eqs: Equation[], known: Record<string, num
   if (meth && withStd) {
     const si = spec.basis.standardInterest;
     let alphaStd = Infinity;
+    // 표준이율 모델 하나 — α^{표준} 과 V^{표준} 이 같은 캐시를 쓴다
+    const std: Model = si === undefined ? mo : { defs, known, scalar: { ...scalar, i: si, v: 1 / (1 + si) }, n };
     try {
-      const std: Model = si === undefined ? mo : { defs, known, scalar: { ...scalar, i: si, v: 1 / (1 + si) }, n };
       const base = Math.round(valueOf(std, "P_base") * 1e5) / 1e5;
       alphaStd = scalar["α_S"] + scalar["α_P"] * base;
     } catch { /* P_base 를 못 세우면 표준기초율 한정을 두지 않는다 */ }
     scalar["α^{표준}"] = alphaStd;
+    // 표준기초율 책임준비금 V^{표준} — 같은 식(V)을 표준이율로 계산한 값. 회계연도말 적립금 V^{결산} = max(V, V^{표준}) 이 쓴다
+    if (si !== undefined && defs.has("V")) {
+      try { known["V^{표준}"] = Array.from({ length: n + 1 }, (_, t) => valueOf(std, "V", t)); } catch { /* V 를 못 세우면 결산 적립금 열만 빠진다 */ }
+    }
   }
   return mo;
 }
@@ -552,7 +557,7 @@ const SYM_LABEL: Record<string, string> = {
   v: "현가율", i: "적용이율", n: "보장기간(년)", m: "납입기간(년)", k: "납입주기별 계수", x: "가입나이",
 };
 /** 왼쪽부터 이 순서로 — 위험률 → 사람 수 → 사람 수의 현가·누계 → 보험금 → 준비금 → 환급금 */
-const COL_ORDER = ["R", "Q", "l", "F", "Q′", "l′", "d", "D", "D′", "H", "N", "N′", "S", "E", "C", "M", "V", "V^{10만}", "해약공제", "W^{표준}", "W", "납입누계", "환급률"];
+const COL_ORDER = ["R", "Q", "l", "F", "Q′", "l′", "d", "D", "D′", "H", "N", "N′", "S", "E", "C", "M", "V", "V^{10만}", "V^{결산}", "해약공제", "W^{표준}", "W", "납입누계", "환급률"];
 const DIGITS: Record<string, number> = { R: 8, F: 8, "Q′": 8, l: 2, "l′": 2, d: 4, D: 4, "D′": 4, H: 4, N: 2, "N′": 2, C: 6, M: 4, S: 4, E: 4, Q: 8, w: 6,
   V: 8, "V^{10만}": 0, 해약공제: 8, "W^{표준}": 8, W: 8, 납입누계: 8, 환급률: 4 };
 /** 표 아래 한 값으로 나오는 것 — 이 순서로 */
@@ -697,6 +702,9 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
       }
       const names = [...COL_ORDER.filter((x) => mo.defs.has(x)), ...[...mo.defs.keys()].filter((x) => !COL_ORDER.includes(x) && isSeries(mo, x))];
       for (const sym of names) {
+        // 표준기초율 책임준비금 — 식이 아니라 같은 식(V)을 표준이율로 세운 값(buildModel). 결산 적립금 바로 앞에 둔다
+        if (sym === "V^{결산}" && known["V^{표준}"]) sheet.cols.push({ sym: "V^{표준}", label: "표준기초율 책임준비금", kind: "series", digits: 8, values: known["V^{표준}"], parts: NO_PARTS, offset: 0,
+          formula: "V^{표준}_t — 같은 식(V)을 표준이율로 계산한 값 (앱이 계산)" });
         const d = mo.defs.get(sym)!;
         const eq = d.direct ?? d.recur?.eq ?? [...d.points.values()][0];
         if (!eq) continue;

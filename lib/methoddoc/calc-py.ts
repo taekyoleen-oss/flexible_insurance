@@ -16,7 +16,7 @@ export interface PyCell { title: string; code: string }
 /** 기호 → 파이썬 이름. 그리스 문자·프라임·별표·첨자·한글 이름을 알파벳 이름으로 */
 const NAME_MAP: Record<string, string> = {
   "l′": "lp", "D′": "Dp", "N′": "Np", "N*": "Nstar", "PVB′": "PVB_p", "G₁": "G1", "G_10만": "G_100k", "V_10만": "V_100k",
-  "P_β": "P_beta", "W^{표준}": "W_std", "α^{공제}": "alpha_ded", "α^{표준}": "alpha_std", 해약공제: "deduction", 납입누계: "paid", 환급률: "refund_rate", "V^{10만}": "V_100k",
+  "P_β": "P_beta", "W^{표준}": "W_std", "V^{표준}": "V_std", "V^{결산}": "V_acc", "α^{공제}": "alpha_ded", "α^{표준}": "alpha_std", 해약공제: "deduction", 납입누계: "paid", 환급률: "refund_rate", "V^{10만}": "V_100k",
   "α_S": "alpha_S", "α_P": "alpha_P", "β_S": "beta_S", "β_G": "beta_G", "β′": "beta_prime", γ: "gamma", α: "alpha", β: "beta", ρ: "rho",
   "v^t": "vt", "v^{t+½}": "vth",
 };
@@ -72,7 +72,7 @@ export function toPython(node: Node, c: Ctx): string {
 }
 
 const PEOPLE = ["Q", "l", "l′", "d"], PV = ["D", "D′", "H", "N", "N′"], BEN = ["S", "E", "C", "M"];
-const RESERVE = ["V", "V^{10만}", "해약공제", "W^{표준}", "W", "납입누계", "환급률"];
+const RESERVE = ["V", "V^{10만}", "V^{표준}", "V^{결산}", "해약공제", "W^{표준}", "W", "납입누계", "환급률"];
 const PREM = ["N*", "PVB", "PVB′", "P", "P_base", "G", "G₁", "G_10만"];
 const RES_SC = ["P_β", "α^{표준}", "α^{공제}"];
 
