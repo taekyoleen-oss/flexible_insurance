@@ -442,6 +442,8 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
     if (v1 && V1_AUTO.test(f.label)) return false;
     if (v2 && V2_AUTO.test(f.label)) return false;
     if (v4 && V4_AUTO.test(f.label)) return false;
+    // 집단 식 제목이 "유지자(…X)" · "납입자(…X)" 로 바뀌기 전(2026-10-02)의 자동 식 — 지금 자동 식에 같은 제목이 없으면 옛 자동 식이다
+    if (/^(유지자수|납입자수) — /.test(f.label) && !/(유지자|납입자)\(/.test(f.label) && !auto.some((a) => a.label === f.label)) return false;
     // v3 → v4 는 절 이름만 바뀌었다(제목은 그대로) — 절 이름을 지금 것으로 옮겨 자동 식과 맞춘다
     if (v3) { const a0 = auto.find((x) => x.label === f.label); if (a0) f.section = a0.section; }
     const a = auto.find((x) => x.section === f.section && x.label === f.label);

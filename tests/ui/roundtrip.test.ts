@@ -93,10 +93,11 @@ describe("② 입력 조건 + 산출 결과 → 산출방법서 → 다시 읽�
     expect(md).toContain("20년");                     // 납입기간
     expect(md).toContain("3대질병 진단");
     expect(md).toContain("80% 이상 장해율");           // 추가 납입면제 사유(고도후유장해)
-    // 질병(3대질병)과 납입면제 사유(80% 장해)는 곱으로, 사망과는 겹치는 부분 절반
-    expect(md).toContain("F_{x+t} = 1 − ( 1 − r_{x+t} )·( 1 − f_{x+t} )");
+    // 납입자수는 하나 — 질병(3대질병 f⁽¹⁾ · 납입면제 80% 장해 f⁽²⁾)은 곱으로, 사망과는 겹치는 부분 절반
+    expect(md).toContain("납입자(사망X, 3대질병X, 80% 이상 장해X)");
+    expect(md).toContain("F_{x+t} = 1 − ( 1 − f^{(1)}_{x+t} )·( 1 − f^{(2)}_{x+t} )");
     expect(md).toContain("Q′_{x+t} = min( 1, q_{x+t} + F_{x+t} − q_{x+t}·F_{x+t}/2 )");
-    expect(md).toContain("납입자수 — 탈퇴 사유에 더해 납입면제 사유가 생긴 사람도 뺀다\nl′_{x+t+1} = l′_{x+t} × ( 1 − Q′_{x+t} )");
+    expect(md).toContain("납입자수 — 납입을 멈추게 하는 사유가 생긴 사람을 뺀다\nl′_{x+t+1} = l′_{x+t} × ( 1 − Q′_{x+t} )");
     expect(md).toContain("산출 결과 — 보험료");
     expect(md).toContain("산출 결과 — 책임준비금·해지환급금");
     // 표시한 월보험료가 실제 산출값과 같다
@@ -171,7 +172,9 @@ describe("② 입력 조건 + 산출 결과 → 산출방법서 → 다시 읽�
     // 납입면제율이 아니라 납입자수 — 사망(q)과 80% 장해(r) 두 사유를 묶은 탈퇴율 Q 의 잔존 식, 설명 줄 아래에 식
     expect(md).toContain("Q_{x+t} = min( 1, q_{x+t} + r_{x+t} − q_{x+t}·r_{x+t}/2 )");
     expect(md).toContain("유지자수 — 탈퇴 사유가 생긴 사람을 뺀다\nl_{x+t+1} = l_{x+t} × ( 1 − Q_{x+t} )");
-    expect(md).toContain("l′_{x+t+1} = l′_{x+t} × ( 1 − Q_{x+t} )");
+    // 납입자수는 따로 하나 — 납입자(사망X, 80% 이상 장해X), 값은 유지자수와 같다
+    expect(md).toContain("Q′_{x+t} = min( 1, q_{x+t} + f_{x+t} − q_{x+t}·f_{x+t}/2 )");
+    expect(md).toContain("l′_{x+t+1} = l′_{x+t} × ( 1 − Q′_{x+t} )");
     expect(md).not.toContain("납입면제 발생률");
   });
 

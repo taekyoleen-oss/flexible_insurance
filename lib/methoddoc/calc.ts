@@ -370,8 +370,8 @@ export const PAY_METHODS: [number, string][] = [[12, "월납"], [4, "3개월납"
 
 export interface BenefitResult {
   id: string; name: string;
-  /** 계약 단위(주계약·특약 이름) · 이 담보가 속한 집단 이름 */
-  unit: string; group: string;
+  /** 계약 단위(주계약·특약 이름) · 이 담보의 유지자 집단 · 보험료(N*)에 쓰는 납입자 */
+  unit: string; group: string; payer: string;
   /** 이 담보의 보장기간(년) · 납입기간(년) */
   n: number; m: number;
   /** 보장금액(원) = 가입금액 × 배수 */
@@ -406,9 +406,9 @@ const expenseOf = (spec: MethodSpec, symbol: string) => {
   return e?.rate ?? e?.times ?? 0;
 };
 
-/** 이 담보의 계산에 쓰는 식 — 그 집단의 유지자수·납입자수, 그 담보의 보험금, 담보마다 같은 현가·보험료·준비금·환급금 */
+/** 이 담보의 계산에 쓰는 식 — 그 담보의 유지자수 · 그 계약 단위의 납입자수(하나), 그 담보의 보험금, 담보마다 같은 현가·보험료·준비금·환급금 */
 const KEYS_OF = (m: BenefitModel) => (f: FormulaSpec) =>
-  !!f.key && ([`group:${m.group.id}`, `pay:${m.group.id}`, `benefit:${m.b.id}`].includes(f.key) || /^(pv|premium|reserve|surrender):/.test(f.key));
+  !!f.key && ([`group:${m.group.id}`, `pay:${m.payer.id}`, `benefit:${m.b.id}`].includes(f.key) || /^(pv|premium|reserve|surrender):/.test(f.key));
 
 /**
  * 담보 하나를 계산할 준비 — 기간·위험률 계열·기호 값·식 목록. computeSpec 과 계산 표(calcSheets)가 같은 것을 쓴다.
@@ -423,7 +423,7 @@ function prepare(spec: MethodSpec, m: BenefitModel, contract: CalcContract, form
   const known: Record<string, number[]> = {};
   const label: Record<string, string> = { ...SYM_LABEL };
   const missing: string[] = [];
-  for (const { sym, rate } of [...m.group.syms, ...m.group.waivers, ...(m.event ? [m.event] : [])]) {
+  for (const { sym, rate } of [...m.group.syms, ...m.payer.syms, ...(m.event ? [m.event] : [])]) {
     label[sym] = rate.name;
     if (known[sym]) continue;
     const { values, ok } = rateSeries(rate, contract, n + 1);
@@ -503,7 +503,7 @@ export function computeSpec(spec: MethodSpec, contract: CalcContract = CALC_DEFA
     for (const name of missing) if (!out.missingRates.includes(name)) out.missingRates.push(name);
     const { eqs, skipped } = parseCached(text);
     const res: BenefitResult = {
-      id: b.id, name: b.name, unit: unitOf(b), group: m.group.label, n, m: pay, amount,
+      id: b.id, name: b.name, unit: unitOf(b), group: m.group.label, payer: m.payer.label, n, m: pay, amount,
       pvb: 0, nStar: 0, net: 0, base: 0, gross: 0, gross6: 0, per100k: 0, premium: 0, skipped,
     };
     try {
@@ -676,8 +676,8 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
     try {
       const mo = buildModel(spec, eqs, known, scalar, n, meth);
       const at = (name: string, t: number) => valueOf(mo, name, t);
-      const rateSyms = [...new Set([...bm.group.syms, ...bm.group.waivers, ...(bm.event ? [bm.event] : [])].map((x) => x.sym))];
-      const sourceOf = (sym: string) => [...bm.group.syms, ...bm.group.waivers, ...(bm.event ? [bm.event] : [])].find((x) => x.sym === sym)?.rate;
+      const rateSyms = [...new Set([...bm.group.syms, ...bm.payer.syms, ...(bm.event ? [bm.event] : [])].map((x) => x.sym))];
+      const sourceOf = (sym: string) => [...bm.group.syms, ...bm.payer.syms, ...(bm.event ? [bm.event] : [])].find((x) => x.sym === sym)?.rate;
       for (const sym of [...rateSyms, ...(known.w ? ["w"] : [])]) {
         const r = sourceOf(sym);
         sheet.cols.push({

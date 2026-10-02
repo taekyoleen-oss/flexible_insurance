@@ -42,37 +42,39 @@ function numbered(base: string, n: number): string[] {
 }
 
 // ── 집단 ────────────────────────────────────────────────────────────────────
+/** 집단 이름 — 빠지는 사유에 X: "유지자(사망X, 80% 이상 장해X)" · "납입자(사망X, 80% 이상 장해X, 암X)" */
+export const crowdLabel = (kind: "유지자" | "납입자", rates: RateRef[]) =>
+  `${kind}(${rates.length ? rates.map((r) => `${reasonOf(r)}X`).join(", ") : "빠지는 사유 없음"})`;
+
 /**
- * 탈퇴자·유지자·납입자 집단. 탈퇴 사유가 같은 담보는 l · l′ 가 똑같으므로 한 집단으로 묶어 한 번만 적는다.
+ * 유지자 집단 — 보험금을 받을 사람. 탈퇴 사유가 같은 담보는 l 이 똑같으므로 한 집단으로 묶어 한 번만 적는다.
  * 조건에 따로 적는 항목이 아니라 담보의 탈퇴 위험률(benefits[].exitRateIds)에서 나온다 — 집단을 고치면 그 담보들의 탈퇴 위험률이 바뀐다.
- * 식은 두 덩이 — 유지자수(keep: 기준 인원 · Q · l — 보장 쪽, 카드 B01)와 납입자수(pay: f · l′ — 보험료 쪽, 카드 M05).
+ * 보험금의 현가(C·M)와 유지자수의 현가 D·N(납입 후 유지비 · 책임준비금)이 이 l 을 쓴다. 납입자수 l′ 는 계약 단위마다 하나(payerModels).
  */
 export interface GroupModel {
   id: string;
-  /** 탈퇴 사유를 이어 붙인 이름 — "사망 · 80% 이상 장해" */
+  /** "유지자(사망X, 80% 이상 장해X)" */
   label: string;
   exits: RateRef[];
   /** 탈퇴 위험률의 기호 */
   syms: { sym: string; rate: RateRef }[];
-  /** 납입만 면제되는 사유 (이 집단의 탈퇴 사유는 뺀다) */
-  waivers: { sym: string; rate: RateRef }[];
   /** 적용해지율 (없으면 undefined) */
   lapseRate?: number;
   /** 이 집단을 쓰는 담보 번호 */
   benefitIdx: number[];
   /** 유지자수 l 의 식 (기준 인원 · 탈퇴율 Q · l) */
   keep: { legend: string[]; lines: string[]; note: string };
-  /** 납입자수 l′ 의 식 (f · l′) */
-  pay: { legend: string[]; lines: string[]; note: string };
 }
+
+const exitsOf = (spec: MethodSpec, b: BenefitSpec) =>
+  (b.exitRateIds ?? []).map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r);
 
 export function groupModels(spec: MethodSpec): GroupModel[] {
   const lapseRate = (spec.basis.lapse ?? []).find((l) => l.rate > 0)?.rate;
-  const allWaivers = waiverRates(spec);
   const out: GroupModel[] = [];
   const keys: string[] = [];                            // 집단을 가르는 열쇠 — 탈퇴 위험률 id 를 이은 것
   spec.benefits.forEach((b, bi) => {
-    const exits = (b.exitRateIds ?? []).map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r);
+    const exits = exitsOf(spec, b);
     const key = exits.map((r) => r.id).join(",");
     const at = keys.indexOf(key);
     if (at >= 0) { out[at].benefitIdx.push(bi); return; }
@@ -80,14 +82,61 @@ export function groupModels(spec: MethodSpec): GroupModel[] {
     const deaths = exits.filter((c) => c.role === "death"), others = exits.filter((c) => c.role !== "death");
     const dq = numbered("q", deaths.length), dr = numbered("r", others.length);
     const syms = exits.map((rate) => ({ rate, sym: rate.role === "death" ? dq[deaths.indexOf(rate)] : dr[others.indexOf(rate)] }));
-    // 납입면제 사유 가운데 이 집단의 탈퇴 사유인 것은 탈퇴로 이미 줄었다 — 납입자수에서 다시 빼지 않는다
-    const ws = allWaivers.filter((w) => !exits.includes(w));
-    const wsym = numbered("f", ws.length);
-    const waivers = ws.map((rate, i) => ({ rate, sym: wsym[i] }));
-    out.push({ id: `g${out.length + 1}`, label: exits.map(reasonOf).join(" · ") || "(탈퇴 사유 없음)", exits, syms, waivers, lapseRate,
-      benefitIdx: [bi], ...groupText(syms, waivers, lapseRate, allWaivers.filter((w) => exits.includes(w))) });
+    out.push({ id: `g${out.length + 1}`, label: crowdLabel("유지자", exits), exits, syms, lapseRate, benefitIdx: [bi], keep: keepText(syms, lapseRate) });
   });
   return out;
+}
+
+/**
+ * 납입자 — 보험료를 낼 사람. 보험료 계산에는 계약 단위(주계약 · 특약)마다 하나만 쓴다.
+ * 줄이는 사유 = 계약 전체를 끝내는 탈퇴 사유(그 단위 모든 담보에 공통 — 보통 사망) + 납입면제 사유.
+ * 질병끼리는 곱으로 먼저 묶고(F), 사망이 있으면 겹치는 부분을 절반으로 결합한다(Q′).
+ */
+export interface PayerModel {
+  id: string;
+  unit: string;
+  /** "납입자(사망X, 80% 이상 장해X, 암X)" */
+  label: string;
+  causes: RateRef[];
+  syms: { sym: string; rate: RateRef }[];
+  lapseRate?: number;
+  benefitIdx: number[];
+  legend: string[];
+  lines: string[];
+  note: string;
+}
+
+export function payerModels(spec: MethodSpec): PayerModel[] {
+  const lapseRate = (spec.basis.lapse ?? []).find((l) => l.rate > 0)?.rate;
+  const lapse = lapseRate !== undefined;
+  const waivers = waiverRates(spec);
+  const unitOfBen = (b: BenefitSpec) => b.unit?.trim() || "주계약";
+  const units = [...new Set(spec.benefits.map(unitOfBen))];
+  return units.map((unit, ui) => {
+    const benefitIdx = spec.benefits.flatMap((b, i) => (unitOfBen(b) === unit ? [i] : []));
+    const lists = benefitIdx.map((i) => exitsOf(spec, spec.benefits[i]));
+    const common = lists[0].filter((r) => lists.every((l) => l.includes(r)));
+    const causes = [...common, ...waivers.filter((w) => !common.includes(w))];
+    const deaths = causes.filter((c) => c.role === "death"), ills = causes.filter((c) => c.role !== "death");
+    const dq = numbered("q", deaths.length), df = numbered("f", ills.length);
+    const syms = causes.map((rate) => ({ rate, sym: rate.role === "death" ? dq[deaths.indexOf(rate)] : df[ills.indexOf(rate)] }));
+    const legend = syms.map((x) => `${x.sym}_x : ${x.rate.name}`);
+    if (lapse) legend.push("w_x : 적용해지율 (납입기간 중)");
+    const qd = !deaths.length ? "" : deaths.length === 1 ? at(dq[0]) : `( ${productText(dq)} )`;
+    const lines: string[] = ["기준 인원", "l′_x = 100,000"];
+    const F = ills.length > 1 ? "F_{x+t}" : ills.length ? at(df[0]) : "";
+    if (ills.length > 1) lines.push("질병 발생률 — 납입을 멈추게 하는 질병끼리는 따로 생긴다고 보고 곱으로 결합한다", `F_{x+t} = ${productText(df)}`);
+    let P = qd || F;
+    if (qd && F) { P = "Q′_{x+t}"; lines.push("납입 탈퇴율 — 사망과는 겹치는 부분을 절반으로 보고, 1 을 넘지 않는다", `Q′_{x+t} = min( 1, ${withDeath(qd, F)} )`); }
+    const expr = !P ? "1" : lapse ? `1 − ${P} − w_{x+t} + ${P}·w_{x+t}/2` : `1 − ${P}`;
+    lines.push("납입자수 — 납입을 멈추게 하는 사유가 생긴 사람을 뺀다", `l′_{x+t+1} = l′_{x+t} × ( ${expr} )`);
+    const note = `보험료 계산에는 납입자수를 ${units.length > 1 ? "계약 단위마다 " : ""}하나만 쓴다 — `
+      + (common.length ? `계약을 끝내는 탈퇴 사유(${common.map(reasonOf).join("·")} — 모든 담보에 공통)` : "모든 담보에 공통인 탈퇴 사유는 없다")
+      + (waivers.length ? `, 납입면제 사유(${waivers.map(reasonOf).join("·")})` : "")
+      + "가 생긴 사람을 뺀다. 별도의 납입면제율을 곱하지 않는다."
+      + (ills.length > 1 ? " 질병끼리는 곱으로, 사망과는 겹치는 부분을 절반으로 결합한다." : "");
+    return { id: `p${ui + 1}`, unit, label: crowdLabel("납입자", causes), causes, syms, lapseRate, benefitIdx, legend, lines, note };
+  });
 }
 
 /** 질병(사망 아닌 사유)끼리의 결합 — 따로 생긴다고 보고 곱으로: 1 − ( 1 − r⁽¹⁾ )·( 1 − r⁽²⁾ )… */
@@ -102,14 +151,12 @@ const withDeath = (q: string, d: string) => `${q} + ${d} − ${q}·${d}/2`;
  *  - 질병(사망 아닌 사유)끼리는 따로 생긴다고 보고 곱으로 결합한다 — R = 1 − Π(1 − rᵢ)
  *  - 사망과는 겹치는 부분을 절반으로 결합한다 — Q = q + R − q·R/2 (최종 연령에서 1 을 넘지 않게 min)
  *  - 사망이 탈퇴 사유가 아니면(사망 시 책임준비금 지급) 질병 발생자만 탈퇴한다 — Q = R
- *  - 납입자수는 탈퇴 사유의 질병과 납입면제 사유를 함께 곱으로 묶은 F 를 사망과 결합한다 — Q′ = q + F − q·F/2
  */
-function groupText(syms: { sym: string; rate: RateRef }[], waivers: { sym: string; rate: RateRef }[], lapseRate: number | undefined, already: RateRef[]) {
+function keepText(syms: { sym: string; rate: RateRef }[], lapseRate: number | undefined) {
   const lapse = lapseRate !== undefined;
   const deaths = syms.filter((x) => x.rate.role === "death").map((x) => x.sym), ills = syms.filter((x) => x.rate.role !== "death").map((x) => x.sym);
   const legend = syms.map((x) => `${x.sym}_x : ${x.rate.name}`);
   if (lapse) legend.push("w_x : 적용해지율 (납입기간 중)");
-  // 사망 쪽 — 하나면 그 기호, 여럿이면(드물다) 곱으로 묶은 식
   const qd = !deaths.length ? "" : deaths.length === 1 ? at(deaths[0]) : `( ${productText(deaths)} )`;
   const keepLines: string[] = ["기준 인원", "l_x = 100,000"];
   // 질병 쪽 — 둘 이상이면 R 로 묶는다(진단형 담보의 급부 발생률도 이 R 이다)
@@ -124,22 +171,7 @@ function groupText(syms: { sym: string; rate: RateRef }[], waivers: { sym: strin
   const reasons = syms.map((x) => reasonOf(x.rate)).join("·");
   const keepNote = !syms.length ? "탈퇴 사유가 없어 기준 인원이 그대로 유지된다."
     : `${reasons} 이(가) 생기면 그 담보는 소멸(탈퇴)한다.${!deaths.length ? " 사망은 탈퇴 사유가 아니다 — 사망 시 책임준비금을 지급하므로 질병 발생자만 탈퇴한다." : ""}${ills.length > 1 ? " 질병끼리는 곱으로, 사망과는 겹치는 부분을 절반으로 결합한다." : ""}`;
-  const keep = { legend, lines: keepLines, note: `${keepNote} 보험금의 현가(바.)는 이 l 을 곱한다.` };
-
-  const payLegend = waivers.length ? [`${waivers.map((w) => `${w.sym}_x`).join(" · ")} : ${waivers.map((w) => w.rate.name).join(" · ")} — 납입만 면제되는 사유`] : [];
-  const payLines: string[] = ["기준 인원", "l′_x = 100,000"];
-  if (waivers.length) {
-    const allIlls = [...ills, ...waivers.map((w) => w.sym)];
-    const F = allIlls.length > 1 ? "F_{x+t}" : at(allIlls[0]);
-    if (allIlls.length > 1) payLines.push("질병 발생률 — 탈퇴 사유의 질병과 납입면제 사유를 함께, 따로 생긴다고 보고 곱으로 결합한다", `F_{x+t} = ${productText(allIlls)}`);
-    let P = F;
-    if (qd) { P = "Q′_{x+t}"; payLines.push("납입 탈퇴율 — 사망과는 겹치는 부분을 절반으로 보고, 1 을 넘지 않는다", `Q′_{x+t} = min( 1, ${withDeath(qd, F)} )`); }
-    payLines.push("납입자수 — 탈퇴 사유에 더해 납입면제 사유가 생긴 사람도 뺀다", `l′_{x+t+1} = l′_{x+t} × ( ${lapse ? `1 − ${P} − w_{x+t} + ${P}·w_{x+t}/2` : `1 − ${P}`} )`);
-  } else payLines.push("납입자수 — 납입만 면제되는 사유가 없어 유지자수와 같다", `l′_{x+t+1} = l′_{x+t} × ( ${keepExpr} )`);
-  const note = `납입자수는 ${waivers.length ? "탈퇴 사유에 더해 f 사유가 생길 때도" : "탈퇴 사유로 유지자수와 똑같이"} 줄어든다 — 별도의 납입면제율을 곱하지 않는다.`
-    + (already.length ? ` 납입면제 사유 중 ${already.map(reasonOf).join("·")} 은(는) 이 집단의 탈퇴 사유라 한 번만 센다.` : "")
-    + (waivers.length ? ` 질병끼리는 곱으로, 사망과는 겹치는 부분을 절반으로 결합한다.` : Q ? ` 탈퇴율 ${Q.replace(/_\{x\+t\}/, "")} 는 이 집단의 유지자수 식에서 정한 것이다.` : "");
-  return { keep, pay: { legend: payLegend, lines: payLines, note } };
+  return { legend, lines: keepLines, note: `${keepNote} 보험금의 현가와 유지자수의 현가 D·N(납입 후 유지비 · 책임준비금)은 이 l 을 쓴다.` };
 }
 
 // ── 담보 ────────────────────────────────────────────────────────────────────
@@ -147,6 +179,8 @@ export interface BenefitModel {
   idx: number;
   b: BenefitSpec;
   group: GroupModel;
+  /** 그 담보가 속한 계약 단위의 납입자 — 보험료(N*)는 이 l′ 로 낸다 */
+  payer: PayerModel;
   /** 급부 발생률의 기호 — 탈퇴 사유이면 그 기호, 아니면 따로 준 g (일당형) */
   event?: { sym: string; rate: RateRef };
   legend: string[];
@@ -200,9 +234,10 @@ export const waitLabel = (b: BenefitSpec) => {
 };
 
 export function benefitModels(spec: MethodSpec): BenefitModel[] {
-  const groups = groupModels(spec);
+  const groups = groupModels(spec), payers = payerModels(spec);
   return spec.benefits.map((b, idx) => {
     const group = groups.find((g) => g.benefitIdx.includes(idx))!;
+    const payer = payers.find((p) => p.benefitIdx.includes(idx))!;
     const lapse = group.lapseRate !== undefined;
     const half = lapse ? "·( 1 − w_{x+t}/2 )" : "";
     const legend: string[] = [];
@@ -234,7 +269,7 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
     const note = b.role === "death" && group.exits.length > 1
       ? `${group.exits.map(reasonOf).join("·")} 모두 같은 보험금을 지급하므로 탈퇴자 전부가 급부 대상이다.`
       : b.role === "incidence" ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
-    return { idx, b, group, event, legend, lines, payout, ...(note ? { note } : {}) };
+    return { idx, b, group, payer, event, legend, lines, payout, ...(note ? { note } : {}) };
   });
 }
 
@@ -255,10 +290,10 @@ export function commonModels(spec: MethodSpec): { key: string; section: string; 
       lines: ["N* = k · [ ( N′_x − N′_{x+m} ) − ( k−1 )/( 2·k )·( D′_x − D′_{x+m} ) ]"],
       note: "k 는 납입주기별 계수(연납 1, 6개월납 2, 3개월납 4, 월납 12)이다. 납입방법에 따라 N* 만 달라지고 보험금의 현가는 같다." },
     { key: "pv:D", section: BEN, label: "유지자수의 현가와 누계 (D · N)", path: I, lines: ["D_{x+t} = l_{x+t}·v^t", "N_{x+t} = Σ_{u≥t} D_{x+u}"],
-      note: "담보마다 그 담보가 속한 집단의 l 로 낸다. 납입 후 유지비와 책임준비금(2.)이 N 을 쓴다." },
+      note: "담보마다 그 담보의 유지자수 l 로 낸다. 납입 후 유지비와 책임준비금(2.)이 N 을 쓴다." },
     ...(lapse ? [{ key: "pv:H", section: BEN, label: "해지자의 현가 (H)", path: `${I}|basis.lapse`, lines: ["H_{x+t} = l_{x+t}·w_{x+t}·v^{t+½}"] }] : []),
     { key: "premium:P", section: PREM, label: "순보험료 (P)", path: "benefits", lines: ["P = PVB / N*"],
-      note: "담보마다 그 담보의 보험금 현가 PVB 와 그 담보가 속한 집단의 N* 로 낸다. 보장금액 1원당이다." },
+      note: "담보마다 그 담보의 보험금 현가 PVB 를 그 계약 단위의 N*(납입자수는 하나)로 나눈다. 보장금액 1원당이다." },
     { key: "premium:base", section: PREM, label: "기준연납순보험료", path: "benefits|expenses", lines: ["P_base = PVB / ( N′_x − N′_{x+min(n,20)} )"] },
     { key: "premium:G", section: PREM, label: "영업보험료", path: "expenses", lines: [meth
       ? "G = [ P + ( α_S + α_P·P_base )·D′_x/N* + β_S/k + β′·( N_{x+m} − N_{x+n} )/N* ] / ( 1 − β_G − γ )"
@@ -281,7 +316,7 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   const multi = spec.benefits.length > 1;
   const benefits = benefitModels(spec);
 
-  // 라. 유지자수·납입자수 — 집단마다 두 덩이 (유지자수 l 은 보장 카드가, 납입자수 l′ 는 보험료 카드가 맡는다)
+  // 라. 유지자수·납입자수 — 유지자 집단마다 l(보장 카드), 납입자는 계약 단위마다 하나 l′(보험료 카드)
   for (const g of groups) {
     const bens = g.benefitIdx.map((i) => `benefits[${i}]`), exits = g.exits.map(idx);
     out.push({
@@ -289,16 +324,19 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
       path: [...bens, ...exits, ...(lapse ? ["basis.lapse"] : [])].join("|"),
       label: `유지자수 — ${g.label}`,
       text: [...g.keep.legend, "", ...g.keep.lines].join("\n"),
-      note: `${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")} 담보가 이 집단을 쓴다. ${g.keep.note}`,
+      note: `${g.benefitIdx.map((i) => spec.benefits[i].name).join(" · ")} 담보가 이 유지자수를 쓴다. ${g.keep.note}`,
     });
+  }
+  const payers = payerModels(spec);
+  for (const p of payers) {
     out.push({
-      section: "유지자수·납입자수", key: `pay:${g.id}`,
-      // 이 집단의 담보 + (있으면) 납입면제·해지율 — 어느 조건을 골라도 이 식이 표시되게
-      path: [...bens, ...(g.waivers.length ? ["basis.waiver", ...(spec.basis.waiverRateIds?.length ? ["basis.waiverRateIds"] : []), ...g.waivers.map((w) => idx(w.rate))] : []),
-        ...(lapse ? ["basis.lapse"] : [])].join("|"),
-      label: `납입자수 — ${g.label}`,
-      text: [...g.pay.legend, ...(g.pay.legend.length ? [""] : []), ...g.pay.lines].join("\n"),
-      note: g.pay.note,
+      section: "유지자수·납입자수", key: `pay:${p.id}`,
+      // 이 단위의 담보 + 줄이는 사유 + (있으면) 납입면제·해지율 — 어느 조건을 골라도 이 식이 표시되게
+      path: [...p.benefitIdx.map((i) => `benefits[${i}]`), ...p.causes.map(idx),
+        ...(spec.basis.waiver ? ["basis.waiver", ...(spec.basis.waiverRateIds?.length ? ["basis.waiverRateIds"] : [])] : []), ...(lapse ? ["basis.lapse"] : [])].join("|"),
+      label: `납입자수 — ${payers.length > 1 ? `${p.unit} ` : ""}${p.label}`,
+      text: [...p.legend, ...(p.legend.length ? [""] : []), ...p.lines].join("\n"),
+      note: p.note,
     });
   }
 
@@ -315,7 +353,7 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
       path: [`benefits[${m.idx}]`, ...(m.event && !m.group.syms.includes(m.event) ? [idx(m.event.rate)] : [])].join("|"),
       label: `보험금의 현가 — ${multi ? `${m.b.unit ? `${m.b.unit} ` : ""}${m.b.name}` : m.b.name}`,
       text: [...m.legend, ...(m.legend.length ? [""] : []), ...m.lines].join("\n"),
-      note: [`보장금액 ${amountLabel(m.b)}${m.b.endAge ? ` · ${endAgeLabel(m.b.endAge)}` : ""} · 면책·삭감 ${waitLabel(m.b)} · 집단 “${m.group.label}”.`, m.note].filter(Boolean).join(" "),
+      note: [`보장금액 ${amountLabel(m.b)}${m.b.endAge ? ` · ${endAgeLabel(m.b.endAge)}` : ""} · 면책·삭감 ${waitLabel(m.b)} · ${m.group.label}.`, m.note].filter(Boolean).join(" "),
     });
   }
   common.filter((c) => c.key.startsWith("premium:")).forEach(put);
