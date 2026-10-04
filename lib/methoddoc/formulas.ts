@@ -332,9 +332,10 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   for (const p of payers) {
     out.push({
       section: "유지자수·납입자수", key: `pay:${p.id}`,
-      // 이 단위의 담보 + 줄이는 사유 + (있으면) 납입면제·해지율 — 어느 조건을 골라도 이 식이 표시되게
+      // 이 단위의 담보 + 줄이는 사유 + 납입면제·해지율 — 어느 조건을 골라도 이 식이 표시되게.
+      // 납입면제 칸은 켜든 끄든 늘 단다 — 끄는 순간 경로가 사라져 고르고 있던 납입자수 식이 강조에서 빠지지 않게
       path: [...p.benefitIdx.map((i) => `benefits[${i}].exitRateIds`), ...p.causes.map(idx),
-        ...(spec.basis.waiver ? ["basis.waiver", ...(spec.basis.waiverRateIds?.length ? ["basis.waiverRateIds"] : [])] : []), ...(lapse ? ["basis.lapse"] : [])].join("|"),
+        "basis.waiver", "basis.waiverRateIds", ...(lapse ? ["basis.lapse"] : [])].join("|"),
       label: `납입자수 — ${payers.length > 1 ? `${p.unit} ` : ""}${p.label}`,
       text: [...p.legend, ...(p.legend.length ? [""] : []), ...p.lines].join("\n"),
       note: p.note,
