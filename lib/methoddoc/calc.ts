@@ -484,12 +484,15 @@ function buildModel(spec: MethodSpec, eqs: Equation[], known: Record<string, num
   return mo;
 }
 
-/** 1원당 보험료를 여섯째 자리까지 → 10만원당(반올림) → 담보 보험료. 식(G₁ · G_{10만})이 있으면 그 값을, 없으면 같은 규칙으로 */
+/** 담보 보험료(원) = 10만원당 × 보장금액 ÷ 10만 에서 10원 미만을 버린다(사용자 규칙 2026-10-04 — 1일당 3만원처럼 10만원의 배수가 아닌 보장금액) */
+export const premiumWon = (per100k: number, amount: number) => Math.floor((per100k * amount) / 1e6 + 1e-9) * 10;
+
+/** 1원당 보험료를 여섯째 자리까지 → 10만원당(반올림) → 담보 보험료(10원 미만 버림). 식(G₁ · G_{10만})이 있으면 그 값을, 없으면 같은 규칙으로 */
 function premiumOf(mo: Model, amount: number) {
   const gross = valueOf(mo, "G");
   const gross6 = mo.defs.has("G₁") ? valueOf(mo, "G₁") : Math.round(gross * 1e6) / 1e6;
   const per100k = mo.defs.has("G_10만") ? valueOf(mo, "G_10만") : Math.round(gross6 * 1e5);
-  return { gross, gross6, per100k, premium: per100k * (amount / 1e5) };
+  return { gross, gross6, per100k, premium: premiumWon(per100k, amount) };
 }
 
 /**

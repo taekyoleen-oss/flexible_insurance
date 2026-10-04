@@ -172,7 +172,7 @@ function benefitCells(s: CalcSheet, bi: number): PyCell[] {
   cells.push({ title: `${tag} — 보험료`, code: [
     `# ── 납입기수 N* → 순보험료 P → 기준연납순보험료 → 영업보험료 G → 1원당 6자리 → 10만원당 → 담보 보험료 ──`,
     ...s.scalars.filter((x) => PREM.includes(x.sym)).flatMap((sc) => [...scalarLines(sc, c), ""]),
-    `premium = G_100k * (S_amt / 100000)   # 담보 보험료(원) = 10만원당 × (보장금액 ÷ 10만)`,
+    `premium = math.floor(G_100k * S_amt / 1000000 + 1e-9) * 10   # 담보 보험료(원) = 10만원당 × (보장금액 ÷ 10만), 10원 미만 버림`,
     `results.append({"name": ${q(s.name)}, "unit": ${q(s.unit)}, "n": n, "m": m, "per100k": G_100k, "premium": premium})`,
     `print(f"N*={Nstar:,.2f}  PVB={PVB:,.4f}  P={P:.10f}  G={G:.10f}  G₁={G1:.6f}  10만원당={G_100k:,.0f}원  담보 보험료={premium:,.0f}원")`,
   ].join("\n") });

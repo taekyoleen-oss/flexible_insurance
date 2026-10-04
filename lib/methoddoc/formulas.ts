@@ -262,7 +262,8 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
       lines.push("생존 지급 시점의 배수", `E_t = ${b.points!.map((p) => `if( t = ${p.age} − x, ${p.multiple}, 0 )`).join(" + ")}`,
         "보험금 현가 (PVB) — 보장금액 1원당", "PVB = M_x + Σ_{u=0}^{n} E_u·D_{x+u}");
     } else lines.push("보험금 현가 (PVB) — 보장금액 1원당", "PVB = M_x");
-    const note = b.role === "incidence" ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
+    // 급부 위험률을 따로 정한 진단형(암수술 등)은 지급 사유가 탈퇴 사유와 달라 "소멸" 문장이 맞지 않는다
+    const note = b.role === "incidence" && !b.rateId ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
     return { idx, b, group, payer, event, legend, lines, payout, ...(note ? { note } : {}) };
   });
 }
@@ -296,7 +297,7 @@ export function commonModels(spec: MethodSpec): { key: string; section: string; 
     { key: "premium:round", section: PREM, label: "1원당 보험료의 반올림과 10만원당 보험료", path: "benefits", lines: [
       "1원당 영업보험료 — 소수 여섯째 자리까지", "G₁ = round₆( G )",
       "10만원당 보험료 — 원 단위로 반올림", "G_{10만} = round( G₁ × 100,000 )"],
-      note: "담보 보험료 = 10만원당 보험료 × (보장금액 ÷ 100,000), 보장금액 = 보험가입금액 × 배수. 여러 담보는 담보 보험료를 더한다." },
+      note: "담보 보험료 = 10만원당 보험료 × (보장금액 ÷ 100,000) 에서 10원 미만을 버린다(10원 단위). 보장금액 = 보험가입금액 × 배수. 여러 담보는 담보 보험료를 더한다." },
   ];
 }
 

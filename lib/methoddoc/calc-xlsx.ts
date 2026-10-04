@@ -112,7 +112,7 @@ const RESULT_ROWS: { key: string; label: string; fmt: number }[] = [
   { key: "α^{표준}", label: "α^표준 (표준이율로 같은 식을 계산한 신계약비 — 앱이 계산한 값)", fmt: 3 },
   { key: "N*", label: "N* 연납 환산 납입기수", fmt: 2 }, { key: "PVB", label: "PVB 보험금의 현가", fmt: 3 }, { key: "PVB′", label: "PVB′ 해지급부를 더한 현가", fmt: 3 },
   { key: "P", label: "P 순보험료 (1원당)", fmt: 3 }, { key: "P_base", label: "P_base 기준연납순보험료", fmt: 3 }, { key: "G", label: "G 영업보험료 (1원당)", fmt: 3 },
-  { key: "G₁", label: "G₁ 1원당 보험료 (소수 6자리)", fmt: 3 }, { key: "G_10만", label: "10만원당 보험료 (원)", fmt: 4 }, { key: "prem", label: "담보 보험료 (원) = 10만원당 × 보장금액/10만", fmt: 4 },
+  { key: "G₁", label: "G₁ 1원당 보험료 (소수 6자리)", fmt: 3 }, { key: "G_10만", label: "10만원당 보험료 (원)", fmt: 4 }, { key: "prem", label: "담보 보험료 (원) = 10만원당 × 보장금액/10만, 10원 미만 버림", fmt: 4 },
   { key: "P_β", label: "P_β 준비금 산출용 순보험료", fmt: 3 }, { key: "α^{공제}", label: "α^공제 해약공제 기준 신계약비", fmt: 3 },
 ];
 const INPUT_NAME: Record<string, string> = { alphaS: "α_S", alphaP: "α_P", betaS: "β_S", betaG: "β_G", betaPrime: "β′", gamma: "γ", alpha: "α", beta: "β", i_std: "i_std" };
@@ -216,7 +216,7 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
       else if (x.key === "S_amt") put(rr, vc, s.multiple !== undefined ? { f: `sum_assured*${ref(bi, "S_mult")}`, fmt: 4 } : { v: s.amount, fmt: 4 });
       else if (x.key === "α_P") put(rr, vc, { v: s.inputs.find((it) => it.name === "alphaP")?.value as number ?? 0, fmt: 3 });
       else if (x.key === "α^{표준}") put(rr, vc, { v: scalar("α^{표준}")?.value ?? 0, fmt: 3 });
-      else if (x.key === "prem") put(rr, vc, { f: `${ref(bi, "G_10만")}*(${ref(bi, "S_amt")}/100000)`, fmt: 4 });
+      else if (x.key === "prem") put(rr, vc, { f: `ROUNDDOWN(${ref(bi, "G_10만")}*${ref(bi, "S_amt")}/100000,-1)`, fmt: 4 });   // 10원 미만 버림
       else {
         const sc = scalar(x.key);
         if (!sc) { put(rr, vc, "—"); continue; }
@@ -238,7 +238,7 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
   names.push({ name: `per100k_${at0}`, sheet: name, ref: `$${colLetter(sumCol)}$${rowOf("G_10만")}` });
   names.push({ name: `prem_${at0}`, sheet: name, ref: `$${colLetter(sumCol)}$${rowOf("prem")}` });
   const gap = DATA_ROW - 1 + RESULT_ROWS.length + 1;
-  put(gap, resultCol, "담보 보험료의 합이 이 단위의 보험료입니다. 10만원당 보험료는 담보마다 원 단위로 반올림한 뒤 더합니다.");
+  put(gap, resultCol, "담보 보험료의 합이 이 단위의 보험료입니다. 10만원당 보험료는 담보마다 원 단위로 반올림하고, 담보 보험료는 10원 미만을 버린 뒤 더합니다.");
 
   const widths = [30, 16, 3, 7, 8, ...Array.from({ length: next - T_COL - 2 }, () => 13), 44, ...sheets.map(() => 16), 14];
   return { name, rows: rows.map((x) => x ?? []), widths, freeze: { rows: HEAD_ROW, cols: T_COL + 2 } };
