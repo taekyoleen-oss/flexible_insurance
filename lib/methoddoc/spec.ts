@@ -87,6 +87,25 @@ export interface BenefitSpec {
   points?: { age: number; multiple: number }[];
   /** 어느 계약 단위인지 — 주계약/특약1 … (탭·모듈 구분) */
   unit?: string;
+  /** 이 담보가 쓰는 생존자(lx) — survivors[].id. 있으면 탈퇴 위험률(exitRateIds)은 그 생존자의 것으로 맞춘다 */
+  survivorId?: string;
+}
+
+/**
+ * 생존자 lx(k) — 탈퇴 위험률로 줄어드는 사람 수(Dx·Nx 까지). 유지자수·납입자수를 나누지 않고 하나로 적는다.
+ * 보험금은 이 lx 를 가져다 쓰고, [납입](pay) 생존자는 그 계약 단위의 보험료 납입기수(N*)에 쓴다.
+ * 조건에 없으면 담보의 탈퇴 위험률과 납입면제에서 저절로 만든다(deriveSurvivors) — 옛 조건·다른 앱의 JSON 도 그대로 읽힌다.
+ */
+export interface SurvivorSpec {
+  id: string;
+  /** 표시 이름(없으면 "생존자(사망X, 암X)") */
+  name?: string;
+  /** 계약 단위 — 없으면 공통(어느 단위의 담보든 쓸 수 있다) */
+  unit?: string;
+  /** 줄이는 사유(탈퇴 위험률 id) — 질병끼리 곱, 사망과는 겹치는 부분 절반으로 결합 */
+  exitRateIds: string[];
+  /** [납입] — 이 생존자로 보험료 납입기수(N*)를 내는 계약 단위(주계약 · 특약 이름). 단위마다 하나 */
+  payFor?: string[];
 }
 
 /** 계약 단위(주계약·특약) 하나. 조건이 주계약과 같으면 비워 두고 상속한다 */
@@ -252,6 +271,8 @@ export interface MethodSpec {
   rates: RateRef[];
   expenses: ExpenseItem[];
   benefits: BenefitSpec[];
+  /** 생존자 lx(k) — 없으면 담보의 탈퇴 위험률·납입면제에서 만든다 */
+  survivors?: SurvivorSpec[];
   units: UnitSpec[];
   reserve: { notes: string[] };
   surrender: { deductionYears?: number; notes: string[] };

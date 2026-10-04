@@ -1,7 +1,7 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { eventRate, generateFormulas } from "./formulas";
+import { compactSurvivors, crowdLabel, eventRate, generateFormulas, syncFromSurvivors } from "./formulas";
 import { FORMULA_MARK, NOTE_MARK } from "./render";
-import { emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole } from "./spec";
+import { emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole, type SurvivorSpec } from "./spec";
 
 /**
  * 산출방법서 → MethodSpec. 규칙(표 먼저, 본문 다음)만으로 돌아간다 — LLM 은 선택이다.
@@ -337,6 +337,9 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       spec.basis.waiverRateIds = ids.length ? ids : undefined;
       add("basis.waiverRateIds", "납입면제 사유", ids.join(", ") || "없음", fx.slice(0, 120), "표준 양식 가.(4)", "high", false);
     }
+    readSurvivorTables(doc, spec, evidence, warnings);
+    // 담보의 탈퇴 위험률·납입면제를 생존자에 맞춘 뒤에 식을 견준다(자동 식이 그 칸으로 만들어진다)
+    if (spec.survivors?.length) { const synced = syncFromSurvivors(spec); spec.benefits = synced.benefits; spec.basis = synced.basis; }
     // v6 은 담보 표가 식 사이(보험금의 현가 바로 위)에 있다 — 글로 뽑힌 표의 행이 앞 식의 줄로 이어지지 않게 지운다(표는 앞에서 읽었다)
     const tableRows = new Set(doc.tables.flatMap((t) => [t.head, ...t.rows].map((r) => squeeze(r.filter(Boolean).join(" ")))));
     readStandard(paragraphs.map((p) => (tableRows.has(squeeze(p)) ? "" : p)), spec, evidence, format!);
@@ -348,7 +351,46 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   if (!spec.expenses.length) missing.push("사업비");
   if (!spec.rates.length) missing.push("위험률");
 
-  return { spec, evidence, missing, warnings: [...new Set([...warnings, ...validateSpec(spec)])], ...(standard ? { format } : {}) };
+  // 생존자가 담보의 탈퇴 위험률·납입면제에서 그대로 만들어지는 것이면 적지 않는다 — 옛 조건과 같은 모양으로 남게
+  const out = compactSurvivors(spec);
+  return { spec: out, evidence, missing, warnings: [...new Set([...warnings, ...validateSpec(out)])], ...(standard ? { format } : {}) };
+}
+
+/**
+ * 생존자 표(표준 산출방법서 v7) — "생존자 | lx(k) — 이름" 다음 행마다 계약 단위 · 탈퇴 위험률 · 납입(N*).
+ * 이름이 탈퇴 사유에서 만든 이름("생존자(사망X, 암X)")과 같으면 적지 않는다.
+ */
+function readSurvivorTables(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warnings: string[]) {
+  const key = (c: string) => squeeze(c).replace(/\s/g, "");
+  const out: SurvivorSpec[] = [];
+  // 생존자 표에만 적은 위험률 — 위험률 표에 없어도 계열로 더한다(담보 표와 같다). 사람이 유형·근거를 채운다
+  const rateByName = (name: string, who: string) => {
+    const s = name.trim();
+    const hit = spec.rates.find((r) => r.name === s) ?? spec.rates.find((r) => s && (r.name.endsWith(` · ${s}`) || s.endsWith(r.name)));
+    if (hit || !s || s === "—") return hit;
+    const ref: RateRef = { id: `r${spec.rates.length + 1}`, name: s, role: roleOf(s) === "lapse" ? "other" : roleOf(s) };
+    spec.rates.push(ref);
+    evidence.push({ path: `rates[${spec.rates.length - 1}]`, label: "위험률", value: s, raw: `생존자 ${who}`, source: "생존자 표", confidence: "medium" });
+    warnings.push(`생존자 ${who} 의 위험률 "${s}" 이(가) 1.2. 위험률 표에 없어 "${RATE_ROLE_LABEL[ref.role]}" 유형으로 더했습니다 — 유형·근거를 확인하세요`);
+    return ref;
+  };
+  doc.tables.forEach((t, ti) => {
+    if (t.head.length !== 2 || key(t.head[0]) !== "생존자") return;
+    const hm = /lx\((\d+)\)\s*[—-]?\s*(.*)$/.exec(t.head[1].trim());
+    if (!hm) return;
+    const get = (k: string) => (t.rows.find((r) => key(r[0] ?? "") === k)?.[1] ?? "").trim();
+    const names = get("탈퇴위험률");
+    const exits = names && names !== "없음" ? names.split(/\s+및\s+|\s*\+\s*|,\s*/).map((nm) => rateByName(nm, `lx(${hm[1]})`)?.id).filter((x): x is string => !!x) : [];
+    const pay = get("납입(N*)").replace(/^—$/, "");
+    const unit = get("계약단위");
+    const rates = exits.map((id) => spec.rates.find((r) => r.id === id)!);
+    // 자동 이름(생존자(사망X, …))은 이름이 아니다 — 탈퇴 위험률 행을 고치면 머리의 옛 자동 이름이 남으므로 모양으로 가린다
+    const name = hm[2].trim() && hm[2].trim() !== crowdLabel("생존자", rates) && !/^생존자\(.*\)$/.test(hm[2].trim()) ? hm[2].trim() : undefined;
+    out.push({ id: `s${hm[1]}`, ...(name ? { name } : {}), ...(unit ? { unit } : {}), exitRateIds: exits,
+      ...(pay ? { payFor: pay.split(/\s*·\s*/).filter(Boolean) } : {}) });
+    evidence.push({ path: `survivors[${out.length - 1}]`, label: "생존자", value: `lx(${hm[1]})`, raw: [t.head, ...t.rows].map((r) => r.join(" ")).join(" | ").slice(0, 160), source: `표 ${ti + 1}`, confidence: "high" });
+  });
+  if (out.length) spec.survivors = out.sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
 }
 
 type Add = (path: string, label: string, value: string | number | boolean, raw: string, source: string, confidence: Confidence, setValue?: boolean) => void;
@@ -448,10 +490,14 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   const V2_AUTO = /^(유지자수·납입자수 — |(유지자수의 현가 \(D\)|납입자수의 현가 \(D′\)|급부 발생자의 현가 \(C\)|유지자수 현가의 누계 \(N\)|납입자수 현가의 누계 \(N′\)|급부 현가 \(PVB\))$)/;
   //  v4 → v5: 집단 식이 유지자수·납입자수 둘로 나뉘고, 현가·준비금·환급금 식의 글과 설명이 모두 바뀌었다 — 옛 자동 식 제목은 전부 건너뛴다
   const V4_AUTO = /^(유지자수·납입자수 — |보험금의 현가 — |(유지자수·납입자수의 현가 \(D · D′\)|해지자의 현가 \(W\)|현가의 누계 \(N · N′\)|연납 환산 납입기수 \(N\*\)|순보험료 \(P\)|기준연납순보험료|영업보험료|저해지·무해지환급형|준비금 산출용 순보험료|연말 책임준비금|해약공제|해약공제 기준 신계약비|표준형 해지환급금|저해지·무해지환급형 해지환급금|환급률|납입누계)$)/;
+  //  v6 → v7: 유지자수·납입자수가 "생존자수 lx(k)" 로 합쳐지고 보험금의 현가가 "보험금 — " 이 되었다. 현가 식(D · N · D′ · N′)은 생존자 식 안으로
+  const oldLayout = /v[1-6]\s*$/.test(format);
+  const OLD_AUTO = /^(유지자수 — |납입자수 — |보험금의 현가 — |(납입자수의 현가와 누계 \(D′ · N′\)|유지자수의 현가와 누계 \(D · N\)|연납 환산 납입기수 \(N\*\)|해지자의 현가 \([HW]\)))/;
   spec.formulas = read.filter((f) => {
     if (v1 && V1_AUTO.test(f.label)) return false;
     if (v2 && V2_AUTO.test(f.label)) return false;
     if (v4 && V4_AUTO.test(f.label)) return false;
+    if (oldLayout && OLD_AUTO.test(f.label)) return false;
     // 집단 식 제목이 "유지자(…X)" · "납입자(…X)" 로 바뀌기 전(2026-10-02)의 자동 식 — 지금 자동 식에 같은 제목이 없으면 옛 자동 식이다
     if (/^(유지자수|납입자수) — /.test(f.label) && !/(유지자|납입자)\(/.test(f.label) && !auto.some((a) => a.label === f.label)) return false;
     // v3 → v4 는 절 이름만 바뀌었다(제목은 그대로) — 절 이름을 지금 것으로 옮겨 자동 식과 맞춘다
@@ -543,7 +589,7 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
   };
   const multi = doc.tables.some((x) => squeeze(x.head.join("")).includes("주계약과다른조건"));
   // v5: 보험기간(= 옛 보장 종료) · 보장금액은 "가입금액의 0.5배" · 면책·삭감(= 옛 면책 + 지급 비율). 옛 열쇠도 그대로 읽는다
-  const KEYS = ["담보", "단위", "급부유형", "지급사유", "보장금액", "보장종료", "보험기간", "면책", "면책·삭감", "급부위험률", "탈퇴위험률"] as const;
+  const KEYS = ["담보", "단위", "급부유형", "지급사유", "보장금액", "보장종료", "보험기간", "면책", "면책·삭감", "급부위험률", "탈퇴위험률", "생존자"] as const;
   type Rec = Partial<Record<(typeof KEYS)[number], string>>;
   const add = (f: Rec, raw: string, ti: number) => {
     const get = (k: keyof Rec) => (f[k] ?? "").trim();
@@ -570,8 +616,11 @@ function readBenefitTable(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidenc
     if (bs.waitDays && cut) bs.waitPayRatio = Number(cut[1]) / 100;
     const ids = exits.split(/\s+및\s+|\s*\+\s*|,\s*/).map((x) => byName(x, name)?.id).filter((x): x is string => !!x);
     if (ids.length) bs.exitRateIds = ids;
+    // v7: 이 보험금이 가져다 쓰는 생존자 lx(k) — 탈퇴 위험률은 생존자 표에서 맞춘다(syncFromSurvivors)
+    const sv = /lx\((\d+)\)/.exec(get("생존자"));
+    if (sv) bs.survivorId = `s${sv[1]}`;
     // 급부 위험률은 탈퇴 사유에서 정해진다 — 거기서 나오는 것과 다를 때만(일당형 등) 따로 적는다
-    if (ev && !/탈퇴\s*사유\s*전부|^—$/.test(ev)) {
+    if (ev && !/탈퇴\s*사유|^—$/.test(ev)) {     // "탈퇴 사유 전부 — 결합 Q (…)" · "탈퇴 사유에서 — 암발생률" 은 생존자에서 정해진다
       const id = byName(ev, name)?.id;
       if (id && id !== eventRate(spec, bs)?.id) bs.rateId = id;
     }

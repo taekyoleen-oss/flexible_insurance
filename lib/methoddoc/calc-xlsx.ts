@@ -186,7 +186,7 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
   sheets.forEach((s, bi) => {
     const mine: Record<string, number> = { ...col };
     for (const c of s.cols) if (c.kind === "rate") mine[c.sym] = rateCol.get(c.sym === "w" ? "w" : c.label)!;
-    put(TITLE_ROW - 1, next, `담보 ${bi + 1}: ${s.name} (집단 ${s.group})`);
+    put(TITLE_ROW - 1, next, `담보 ${bi + 1}: ${s.name} (생존자 ${s.group})`);
     for (const c of series[bi]) { mine[c.sym] = next; put(HEAD_ROW - 1, next, `${c.sym} ${c.label}`); next++; }
     next++;                                                                   // 구역 사이 빈 열
     const sym: Record<string, string> = { v: "v_disc", i: "i_rate", k: "k_freq", x: "x_age", ρ: "rho", n: ref(bi, "n"), m: ref(bi, "m"), "α_P": ref(bi, "α_P") };

@@ -1,5 +1,5 @@
-import { amountLabel, eventRate, groupModels, payerModels, waitLabel } from "./formulas";
-import { endAgeLabel, hasContract, hasProduct, RATE_ROLE_LABEL, waiverRates, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
+import { amountLabel, eventCauses, eventRate, survivorModels, waitLabel, type SurvivorModel } from "./formulas";
+import { endAgeLabel, hasContract, hasProduct, RATE_ROLE_LABEL, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
  * MethodSpec → 산출방법서. 앱에 딸리지 않는다(import 는 spec 하나뿐).
@@ -45,12 +45,17 @@ const yearsOf = (y?: number, a?: number) => (y ? `${y}년` : a ? `${a}세 만기
  *     1장 = 가. 예정기초율 · 나. 기호의 정의 · 다. 유지자수·납입자수 · 라. 계산기수 — 보험료 · 마. 계산기수 — 보험금(담보 표 + 식) ·
  *     바. 순보험료 및 영업보험료. 가.(4) 는 사유와 f_x 줄만(결합은 납입자수 식에). 식의 설명·덧붙임은 식 줄이 이미 말하는 것을 되풀이하지 않는다.
  *     해약공제 기간은 해약공제 식의 min(m, N) 에서 읽는다(따로 적던 ※ 문장 없음).
+ *  v7 (2026-10-05): 생존자 · 보험금 두 갈래로 단순화 — 유지자수·납입자수를 나누지 않고 "생존자수 lx(k)" 로 적는다(실무 기수표의 lx(1) · lx(2) …).
+ *     1장 = 가. 예정기초율((1) 이율 (2) 위험률 (3) 해지율 (4) 사업비 — 납입면제는 생존자의 [납입]으로) · 나. 기호의 정의 ·
+ *     다. 생존자(생존자마다 표 [탈퇴 위험률 · 납입(N*) · 계산기수 lx·Dx·Nx] + 식) · 라. 보험금(담보마다 표 [… · 생존자 lx(k) · 급부 위험률 · 계산기수 Cx·Mx] + 식 —
+ *     lx·Dx·Nx 는 그 생존자에서 가져온다) · 마. 순보험료 및 영업보험료(N* · P · G · 반올림). 생존자·보험금을 더하면 표가 하나씩 는다.
  */
-export const STANDARD_FORMAT = "표준 산출방법서 v6";
+export const STANDARD_FORMAT = "표준 산출방법서 v7";
 
-/** 1장 안의 소제목 차례 — 실무 산출방법서의 "가. 예정기초율 … 사. 순보험료 및 영업보험료" */
-const BENEFIT_SUB = "계산기수 — 보험금";
-const PREMIUM_SUBS = ["유지자수·납입자수", "계산기수 — 보험료", BENEFIT_SUB, "순보험료 및 영업보험료"];
+/** 1장 안의 소제목 차례 — 실무 산출방법서의 "가. 예정기초율 … 마. 순보험료 및 영업보험료" */
+const SURVIVOR_SUB = "생존자";
+const BENEFIT_SUB = "보험금";
+const PREMIUM_SUBS = [SURVIVOR_SUB, BENEFIT_SUB, "순보험료 및 영업보험료"];
 const RESERVE = "책임준비금의 계산에 관한 사항";
 const SURRENDER = "해지환급금의 계산에 관한 사항";
 
@@ -136,11 +141,8 @@ function productBlocks(p: ProductInfo, withContract: boolean): DocBlock[] {
  * 기호의 정의 — 기간·주기·기초율 기호. 위험률 기호(q · r · f)는 담보별 식의 첫 줄들에서 정의한다.
  * 값은 싣지 않는다(1. 기초율 표가 값이다) — 되읽을 때 같은 값이 두 번 잡히지 않게.
  */
-function symbolBlocks(spec: MethodSpec, groups: ReturnType<typeof groupModels>): DocBlock[] {
+function symbolBlocks(spec: MethodSpec): DocBlock[] {
   const lapse = (spec.basis.lapse ?? []).some((l) => l.rate > 0);
-  const one = groups.length === 1 ? groups[0] : undefined;
-  const reasons = (g: (typeof groups)[number]) => g.exits.map((r) => r.name.replace(/\s*(발생)?[율률]\s*$/, "")).join(" · ") || "탈퇴 사유";
-  const payers = payerModels(spec);
   const rows: [string, string][] = [
     ["x", "피보험자의 가입나이"],
     ["t", "경과기간(년), 0 ≤ t < n"],
@@ -149,13 +151,14 @@ function symbolBlocks(spec: MethodSpec, groups: ReturnType<typeof groupModels>):
     ["k", "납입주기별 계수 — 연 납입횟수 (연납 1, 6개월납 2, 3개월납 4, 월납 12)"],
     ["i", "적용이율 (가.(1))"],
     ["v", "현가율 = 1/(1+i)"],
-    ["l_{x+t}", `t시점 생존자수 (기준 인원 l_x = 100,000) — ${one ? `${reasons(one)} 가 생기지 않은 사람 수` : "그 집단의 탈퇴 사유가 생기지 않은 사람 수"}`],
-    // 유지자·납입자 집단 이름은 유지자수·납입자수 식의 제목이 정의한다 — 여기서 되풀이하지 않는다
-    ["l′_{x+t}", `t시점 납입자수 (기준 인원 l′_x = 100,000) — 탈퇴·납입면제 사유가 생기지 않은 사람 수. 보험료(N*)에 쓰고 ${payers.length > 1 ? "계약 단위마다" : "계약 전체에"} 하나다`],
+    ["l^{(k)}_{x+t}", "생존자 lx(k) — t시점 생존자수(기준 인원 l^{(k)}_x = 100,000). 그 생존자의 탈퇴 사유가 생기지 않은 사람 수 (다.)"],
+    ["D^{(k)}_{x+t} · N^{(k)}_{x+t}", "생존자 lx(k) 의 현가와 그 누계"],
+    ["l · D · N", "보험금이 가져다 쓰는 생존자의 lx · Dx · Nx (라. — 담보마다 그 생존자)"],
+    ["D′ · N′", "그 계약 단위의 [납입] 생존자의 Dx · Nx — 보험료 납입기수 N* 에 쓴다"],
     ["S_t", "t년도 보장금액의 배수 — 면책·삭감을 반영한다. 보장금액 = 보험가입금액 × 담보의 배수"],
+    ["C_{x+t} · M_{x+t}", "급부 발생자의 현가와 그 누계 (라.)"],
     ["V_t", "t년도 말 책임준비금 (보장금액 1원당, 2.)"],
     ["W_t", "t년도 말 해지환급금 (보장금액 1원당, 3.)"],
-    ...(spec.basis.waiver && waiverRates(spec).length ? [["f_{x+t}", "납입을 멈추게 하는 질병(납입면제 사유 등)의 발생률 — 납입자수 식"] as [string, string]] : []),
     ...(lapse ? [["w_{x+t}", "적용해지율 (가.(3))"] as [string, string]] : []),
     ...(lapse && spec.basis.lowRatio !== undefined ? [["ρ", "납입기간 중 해지환급금 비율 (가.(3) — 무해지 0)"] as [string, string]] : []),
   ];
@@ -222,20 +225,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       basisBlocks.push({ t: "note", path: "basis.lowRatio", text: `납입기간 중 해지환급금 = 표준형(완전 환급) × ${Math.round(spec.basis.lowRatio * 100)}%${spec.basis.lowRatio === 0 ? " (무해지환급형)" : ""}.` });
     }
   } else basisBlocks.push({ t: "p", text: "적용하지 않음 (w = 0).", path: "basis.lapse" });
-  basisBlocks.push({ t: "p", text: "(4) 납입면제 사유", path: "basis.waiver" });
-  const wr = waiverRates(spec);
-  if (spec.basis.waiver && wr.length) {
-    // 결합(F · Q′)은 유지자수·납입자수의 납입자수 식에 있다 — 여기에는 사유만
-    basisBlocks.push({ t: "p", path: "basis.waiver|basis.waiverRateIds", text:
-      `납입면제 사유는 ${wr.map((r) => r.name).join(" · ")} 이다. 보장은 그대로 두고 남은 보험료만 면제하므로 납입자수 l′ 에서만 뺀다(유지자수·납입자수).` });
-    // "f_x : A · B" 는 되읽을 때 납입면제 사유를 알아보는 표시다(담보별 식의 f 줄은 "—" 가 붙어 다르다)
-    basisBlocks.push({ t: "formula", path: "basis.waiver|basis.waiverRateIds", text: `f_x : ${wr.map((r) => r.name).join(" · ")}` });
-  } else {
-    basisBlocks.push({ t: "p", path: "basis.waiver", text: spec.basis.waiver
-      ? "납입면제를 적용하나 위험률이 지정되지 않았습니다."
-      : "별도의 납입면제율을 두지 않는다(f = 0). 납입자수 l′ 는 모든 담보에 공통인 탈퇴 사유로만 준다(유지자수·납입자수)." });
-  }
-  basisBlocks.push({ t: "p", text: "(5) 예정사업비율", path: "expenses" });
+  basisBlocks.push({ t: "p", text: "(4) 예정사업비율", path: "expenses" });
   basisBlocks.push(spec.expenses.length
     ? table(["구분", "기호", "기준", "적용사업비율"], spec.expenses.map((e, i) => [[
         e.group + (e.phase ? ` (${e.phase})` : ""), e.symbol || "—", e.basis, expenseRate(e)], `expenses[${i}]`]))
@@ -261,7 +251,28 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   }
   // 담보 표 — 따로 절을 두지 않고 그 담보의 "보험금의 현가" 식 바로 위에 싣는다(보장 내용과 보험금 식이 한 자리에).
   // 행마다 그 조건 칸의 경로 — 조건에서 보장금액을 고르면 이 표의 보장금액 행과 그 식만 비친다
-  const groups = groupModels(spec);
+  const survs = survivorModels(spec);
+  const survOfBen = (i: number) => survs.find((x) => x.benefitIdx.includes(i));
+  /** 급부 위험률 — 따로 고른 것은 그 이름, 사망형은 그 생존자의 탈퇴 사유 전부(결합 Q), 사망 아닌 사유가 여럿이면 결합 R */
+  const eventText = (b: (typeof spec.benefits)[number], i: number) => {
+    const sv = survOfBen(i), named = b.rateId && spec.rates.some((r) => r.id === b.rateId) ? rateName(b.rateId) : undefined;
+    if (named) return named;
+    if (b.role === "death") return `탈퇴 사유 전부 — 결합 Q (${sv?.exits.map((r) => r.name).join(" 및 ") || "없음"})`;
+    const c = eventCauses(spec, b);
+    // 따로 고르지 않은 것은 "탈퇴 사유에서 — …" — 되읽을 때 따로 고른 급부 위험률(rateId)로 잘못 들이지 않게
+    return c.length > 1 ? `탈퇴 사유 전부 — 결합 R (${c.map((r) => r.name).join(" 및 ")})` : c.length ? `탈퇴 사유에서 — ${c[0].name}` : eventRate(spec, b)?.name ?? "—";
+  };
+  /** 생존자 표 — lx(k) 마다. 행 경로는 생존자 칸(survivors[j]) + 그 식 */
+  const survivorTable = (sv: SurvivorModel): DocBlock[] => {
+    const j = (spec.survivors ?? []).findIndex((x) => x.id === sv.id);
+    const at = (k?: string) => [...(j >= 0 ? [k ? `survivors[${j}].${k}` : `survivors[${j}]`] : []), `formula:surv.${sv.id}`].join("|");
+    return [table(["생존자", `lx(${sv.k}) — ${sv.label}`], [
+      ...(sv.unit ? [[["계약 단위", sv.unit], at("unit")] as [string[], string]] : []),
+      [["탈퇴 위험률", sv.exits.map((r) => r.name).join(" 및 ") || "없음"], at("exitRateIds")],
+      [["납입(N*)", sv.payUnits.join(" · ") || "—"], at("payFor")],
+      [["계산기수", "lx · Dx · Nx"], at()],
+    ])];
+  };
   const benefitTable = (b: (typeof spec.benefits)[number], i: number): DocBlock[] => {
     const at = (...k: string[]) => [...k.map((x) => `benefits[${i}].${x}`), `formula:benefit.${b.id}`].join("|");
     const rows: [string[], string][] = [
@@ -273,9 +284,10 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       [["보험기간", endAgeLabel(b.endAge)], at("endAge")],
       [["보장금액", amountLabel(b)], at("multiple", "amount")],
       [["면책·삭감", waitLabel(b)], at("waitDays", "waitPayRatio")],
-      // 급부 위험률은 탈퇴 사유에서 정해진다(사망형은 전부, 진단형은 사망이 아닌 것) — 따로 정한 것(일당형)만 싣는다
-      ...(b.rateId && b.rateId !== eventRate(spec, { ...b, rateId: undefined })?.id ? [[["급부 위험률", rateName(b.rateId)], at("rateId")] as [string[], string]] : []),
-      [["탈퇴 위험률", (b.exitRateIds ?? []).map(rateName).join(" 및 ") || "—"], at("exitRateIds")],
+      // 생존자 — 이 보험금이 가져다 쓰는 lx(k) (탈퇴 위험률은 생존자 표에)
+      [["생존자", survOfBen(i) ? `lx(${survOfBen(i)!.k}) — ${survOfBen(i)!.label}` : "—"], at("survivorId", "exitRateIds")],
+      [["급부 위험률", eventText(b, i)], at("rateId")],
+      [["계산기수", "Cx · Mx"], at()],
     ];
     return [
       table(["담보", b.name], rows),
@@ -297,7 +309,9 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     const path = [f.path, f.key ? `formula:${f.key.replace(/:/g, ".")}` : ""].filter(Boolean).join("|") || undefined;
     const bi = f.key?.startsWith("benefit:") ? spec.benefits.findIndex((b) => `benefit:${b.id}` === f.key) : -1;
     if (bi >= 0) placed.add(spec.benefits[bi].id);
+    const sv = f.key?.startsWith("surv:") ? survs.find((x) => `surv:${x.id}` === f.key) : undefined;
     return [
+      ...(sv ? survivorTable(sv) : []),
       ...(bi >= 0 ? benefitTable(spec.benefits[bi], bi) : []),
       { t: "p" as const, text: f.label, path, kind: "label" as const },
       { t: "formula" as const, text: f.text, path },
@@ -306,7 +320,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   });
   const take = (name: string) => { const l = bySection.get(name); bySection.delete(name); return l; };
 
-  if (spec.formulas.length) basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec, groups));
+  if (spec.formulas.length) basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec));
   for (const name of PREMIUM_SUBS) {
     const list = take(name) ?? [];
     const blocks = formulaBlocks(list);
