@@ -1,5 +1,5 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { compactSurvivors, crowdLabel, eventRate, generateFormulas, isAutoKeepLabel, keepLabel, rateSymbols, syncFromSurvivors } from "./formulas";
+import { comboLabel, compactCombos, compactSurvivors, crowdLabel, eventRate, generateFormulas, isAutoKeepLabel, keepLabel, rateSymbols, syncFromSurvivors } from "./formulas";
 import { FORMULA_MARK, NOTE_MARK } from "./render";
 import { coverFields, emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole, type SurvivorSpec } from "./spec";
 
@@ -352,14 +352,15 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   if (!spec.rates.length) missing.push("위험률");
 
   // 생존자가 담보의 탈퇴 위험률·납입면제에서 그대로 만들어지는 것이면 적지 않는다 — 옛 조건과 같은 모양으로 남게
-  const out = compactSurvivors(spec);
+  const out = compactCombos(compactSurvivors(spec));
   return { spec: out, evidence, missing, warnings: [...new Set([...warnings, ...validateSpec(out)])], ...(standard ? { format } : {}) };
 }
 
 /**
  * 표준 산출방법서 v8 — 유지자 표 · 보험금 표 · 보장 표. 표는 식 위주라 기호(q · r^{(i)} · Q^{(k)} · l^{(k)})로 위험률·유지자를 되짚는다.
  *  - 유지자 표: "대상 위험률 | Q^{(k)} = … 또는 q_{x+t}" · "계산기수 | l^{(k)}_{x+t+1} = …" · "현가누계 | D′ …(납입이면 D′)". 이름은 앞 문단 "(k) l^{(k)}_x — 이름"
- *  - 보험금 표: "대상자수 | l^{(k)}_{x+t}" · "계산기수 | d^{(k)} = l^{(k)} × 발생률" — 발생률의 기호로 급부 유형·급부 위험률을 정한다
+ *  - 보험금 표: "대상자수 | l^{(k)}_{x+t}" · "계산기수 | d^{(k)} = l^{(k)} × 발생률" · "현가 및 누계"(옛 판 "계산기수") — 발생률의 기호로 급부 유형·급부 위험률을 정한다
+ *  - 위험률 합성 표(나. 기호의 정의 아래): "기호 | 이름 | 식" — Q^{(j)} · R^{(j)} 를 위험률로 펼친다. 옛 판은 유지자 표의 대상 위험률에 합성 식이 그대로 있다
  *  - 보장 표: "구분 | (계약 단위) | (보험기간) | 보장금액 배수 | 면책 | 삭감기간 | 삭감 시 지급률" — 보험금 표와 같은 차례
  * v8 표가 없으면 false (옛 판은 readSurvivorTables · readBenefitTable 이 읽는다)
  */
@@ -369,7 +370,7 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
   const cells = (t: Seg, k: string) => t.filter(([x]) => x === k).map(([, v]) => v);
   // 표 경계가 아니라 행의 흐름으로 나눈다 — PDF 는 문단만 사이에 둔 표들을 한 표로 이어 읽는다.
   // 유지자 = (계약 단위) · (질병 발생률) · 대상 위험률 · 계산기수 · 현가누계 / 보험금 = (계약 단위) · 대상자수 · 계산기수 · 계산기수
-  const ROW_KEYS = ["계약단위", "질병발생률", "대상위험률", "계산기수", "현가누계", "대상자수"];
+  const ROW_KEYS = ["계약단위", "질병발생률", "대상위험률", "계산기수", "현가누계", "대상자수", "현가및누계"];
   const keepTabs: Seg[] = [], benTabs: Seg[] = [];
   let seg: Seg = [];
   for (const r of doc.tables.flatMap((t) => [t.head, ...t.rows])) {
@@ -378,7 +379,7 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
     if (r.length !== 2 || !ROW_KEYS.includes(k)) { seg = []; continue; }
     seg.push([k, v]);
     if (k === "현가누계") { keepTabs.push(seg); seg = []; }
-    else if (k === "계산기수" && seg.some(([x]) => x === "대상자수") && seg.filter(([x]) => x === "계산기수").length === 2) { benTabs.push(seg); seg = []; }
+    else if (seg.some(([x]) => x === "대상자수") && (k === "현가및누계" || (k === "계산기수" && seg.filter(([x]) => x === "계산기수").length === 2))) { benTabs.push(seg); seg = []; }
   }
   const coverTab = doc.tables.find((t) => key(t.head[0] ?? "") === "구분" && t.head.some((h) => key(h) === "보장금액배수"));
   if (!keepTabs.length && !benTabs.length) return false;
@@ -388,6 +389,20 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
   const symsIn = (text: string) => [...normFormula(text).matchAll(/([qrQR])_x\+t(?:\^\((\d+)\))?/g)].map((m) => ({ letter: m[1], n: m[2] }));
   // 첨자 없는 q · r 은 그 글자의 첫 위험률 — 문서에 위험률을 더하면 기호가 r → r^{(1)} · r^{(2)} 로 바뀌는데, 앞서 적힌 칸은 r 그대로다
   const rateOfSym = (x: { letter: string; n?: string }) => (x.letter === "q" || x.letter === "r" ? bySym.get(x.n ? `${x.letter}^(${x.n})` : x.letter) ?? (x.n ? undefined : bySym.get(`${x.letter}^(1)`)) : undefined);
+  // 위험률 합성 — "Q^(j)" → 위험률 id 들(안의 R 은 펼친다)과 이름
+  const combos = new Map<string, { j: number; ids: string[]; name?: string }>();
+  const symKey = (x: { letter: string; n?: string }) => `${x.letter}^(${x.n ?? ""})`;
+  const idsOf = (text: string) => {
+    const out: string[] = [];
+    for (const x of symsIn(text)) for (const id of x.letter === "Q" || x.letter === "R" ? combos.get(symKey(x))?.ids ?? [] : [rateOfSym(x)].filter((y): y is string => !!y)) if (!out.includes(id)) out.push(id);
+    return spec.rates.map((r) => r.id).filter((id) => out.includes(id));
+  };
+  for (const t of doc.tables.filter((x) => x.head.map(key).join("|") === "기호|이름|식")) for (const r of t.rows) {
+    const [lhs, rhs] = (r[2] ?? "").split("=");
+    const sym = lhs ? symsIn(lhs).find((x) => (x.letter === "Q" || x.letter === "R") && x.n) : undefined;
+    if (!sym || !rhs) continue;
+    combos.set(symKey(sym), { j: Number(sym.n), ids: idsOf(rhs), name: (r[1] ?? "").trim() || undefined });
+  }
   const kOf = (text: string, re: RegExp) => { const m = re.exec(normFormula(text)); return m ? Number(m[1]) : undefined; };
   // 유지자 이름 — 앞 문단 "(k) l^{(k)}_x — 이름" (첨자 순서는 Word 마다 다르다)
   const names = new Map<number, string>();
@@ -400,7 +415,7 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
   keepTabs.forEach((t, i) => {
     const k = kOf(cells(t, "계산기수").join(" "), /l_x\+t\+1\^\((\d+)\)/) ?? i + 1;
     const rateText = [...cells(t, "질병발생률"), ...cells(t, "대상위험률")].join(" ");
-    const exits = /^없음$/.test(cells(t, "대상위험률")[0] ?? "") ? [] : spec.rates.map((r) => r.id).filter((id) => symsIn(rateText).some((x) => rateOfSym(x) === id));   // 위험률 표의 차례로
+    const exits = /^없음$/.test(cells(t, "대상위험률")[0] ?? "") ? [] : idsOf(rateText);   // 위험률 표의 차례로 — 합성 기호는 그 위험률들로
     const lost = symsIn(rateText).filter((x) => (x.letter === "q" || x.letter === "r") && !rateOfSym(x));
     if (lost.length) warnings.push(`유지자 lx(${k}) 의 기호 ${[...new Set(lost.map((x) => (x.n ? `${x.letter}^{(${x.n})}` : x.letter)))].join(" · ")} 에 맞는 위험률이 가.(2) 예정위험률 표에 없습니다 — 위험률 행을 지웠다면 유지자 표의 대상 위험률도 고치세요`);
     const pv = cells(t, "현가누계").join(" "), pay = /D[′'’]/.test(pv);
@@ -443,6 +458,12 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
       }
     }
     const evRate = named?.id ?? ev.map(rateOfSym).find(Boolean), rate = spec.rates.find((r) => r.id === evRate);
+    // 합성 기호 — 유지자의 대상 위험률(사망형) · 그 질병들(진단형)과 같으면 따로 적지 않고, 다르면 급부 위험률로 그 합성을 고른다
+    const cx = ev.find((x) => combos.has(symKey(x)));
+    const cids = cx ? combos.get(symKey(cx))!.ids : [];
+    const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+    const svIlls = (sv?.exitRateIds ?? []).filter((id) => spec.rates.find((r) => r.id === id)?.role !== "death");
+    const pickCombo = cx && !(sv && (same(cids, sv.exitRateIds) || (cx.letter === "R" && same(cids, svIlls)))) ? `c${combos.get(symKey(cx))!.j}` : undefined;
     const combined = ev.some((x) => x.letter === "Q"), ill = ev.some((x) => x.letter === "R");
     const role: BenefitSpec["role"] = combined ? "death" : ill ? "incidence" : rate?.role === "death" ? "death" : rate?.role === "recurring" ? "recurring" : "incidence";
     const bs: BenefitSpec = { id: `b${spec.benefits.length + 1}`, name, role, ...(unit && unit !== "주계약" ? { unit } : {}),
@@ -455,6 +476,7 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
     const ratio = /([\d.]+)\s*%/.exec(get("삭감시"));
     Object.assign(bs, Object.fromEntries(Object.entries(coverFields({ wait: days(get("면책")), reduce: days(get("삭감기간")), ratio: ratio ? Number(ratio[1]) / 100 : undefined })).filter(([, v]) => v !== undefined)));
     // 급부 위험률 — 유지자의 탈퇴 사유에서 정해지는 것과 다를 때만 따로 적는다(일당형 · 암수술 등)
+    if (pickCombo) bs.rateId = pickCombo;
     if (rate && !combined && !ill) {
       const auto = role === "death" ? (sv?.exitRateIds.length === 1 ? sv.exitRateIds[0] : undefined) : eventRate(spec, { ...bs, rateId: undefined })?.id;
       if (rate.id !== auto) bs.rateId = rate.id;
@@ -470,6 +492,13 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
       .map((r) => /(\d+)\s*세/.exec(r.term ?? "")?.[1]).filter(Boolean).map(Number))];
     if (ages.length === 1) b.endAge = ages[0];
   }
+  // 합성마다 하나 — 안의 질병 곱 R^{(j)} 행 뒤에 오는 대표 기호 행이 그 합성이다
+  const byJ = new Map([...combos.values()].map((c) => [c.j, c]));
+  if (byJ.size) spec.combos = [...byJ.values()].sort((a, b) => a.j - b.j).map((c) => {
+    const name = c.name && c.name !== comboLabel(c.ids.map((id) => spec.rates.find((r) => r.id === id)!)) ? c.name : undefined;
+    return { id: `c${c.j}`, ...(name ? { name } : {}), rateIds: c.ids };
+  });
+  spec.combos?.forEach((c, i) => evidence.push({ path: `combos[${i}]`, label: "위험률 합성", value: c.name ?? c.id, raw: c.rateIds.join(" · "), source: "위험률 합성 표", confidence: "high" }));
   spec.survivors = survivors.sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))).map(({ payAll, ...x }) => (payAll ? { ...x, payFor: [...units] } : x));
   return true;
 }

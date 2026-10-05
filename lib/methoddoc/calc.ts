@@ -410,12 +410,13 @@ const expenseOf = (spec: MethodSpec, symbol: string) => {
 const KEYS_OF = (m: BenefitModel) => (f: FormulaSpec) =>
   !!f.key && ([`surv:${m.survivor.id}`, `surv:${m.pay.id}`, `benefit:${m.b.id}`].includes(f.key) || /^(pv|premium|reserve|surrender):/.test(f.key));
 /** 그 담보의 계산에 쓰는 위험률 기호 — 유지자 · [납입] 유지자 · 급부 위험률 */
-const symsOf = (m: BenefitModel) => [...m.survivor.syms, ...m.pay.syms, ...(m.event ? [m.event] : [])];
+const symsOf = (m: BenefitModel) => [...m.survivor.syms, ...m.pay.syms, ...(m.event ? [m.event] : []), ...(m.combo?.combo.syms ?? [])];
 /** 유지자 계열 이름(l^{(k)} · D^{(k)} …)의 뜻 */
 function survivorLabel(name: string): string | undefined {
   const x = /^([lDNQR])\^\{\((\d+)\)\}$/.exec(name);
   if (!x) return undefined;
-  return { l: "유지자수", D: "유지자수의 현가", N: "유지자수 현가의 누계", Q: "결합 탈퇴율", R: "질병 발생률 (곱 결합)" }[x[1]] + ` lx(${x[2]})`;
+  if (x[1] === "Q" || x[1] === "R") return `위험률 합성 (${x[2]})`;
+  return { l: "유지자수", D: "유지자수의 현가", N: "유지자수 현가의 누계" }[x[1]] + ` lx(${x[2]})`;
 }
 
 /**

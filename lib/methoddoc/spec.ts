@@ -127,6 +127,18 @@ export interface SurvivorSpec {
   payFor?: string[];
 }
 
+/**
+ * 위험률 합성 — 여러 위험률을 한 기호(Q^{(j)} · R^{(j)})로 묶은 것. 유지자의 대상 위험률·보험금의 급부 위험률이 가져다 쓴다.
+ * 질병(사망 아닌 사유)끼리는 곱, 사망과는 겹치는 부분 절반(탈퇴율 결합 규칙). 산출방법서 "나. 기호의 정의" 아래 표에 싣는다.
+ * 조건에 없으면 유지자·보험금이 쓰는 위험률 묶음에서 만든다(combosOf).
+ */
+export interface ComboSpec {
+  id: string;
+  /** 표시 이름(없으면 "사망·80% 이상 장해 결합") */
+  name?: string;
+  rateIds: string[];
+}
+
 /** 계약 단위(주계약·특약) 하나. 조건이 주계약과 같으면 비워 두고 상속한다 */
 export interface UnitSpec {
   id: string;
@@ -292,6 +304,8 @@ export interface MethodSpec {
   benefits: BenefitSpec[];
   /** 생존자 lx(k) — 없으면 담보의 탈퇴 위험률·납입면제에서 만든다 */
   survivors?: SurvivorSpec[];
+  /** 위험률 합성 — 없으면 유지자·보험금이 쓰는 위험률 묶음에서 만든다 */
+  combos?: ComboSpec[];
   units: UnitSpec[];
   reserve: { notes: string[] };
   surrender: { deductionYears?: number; notes: string[] };
@@ -364,10 +378,11 @@ export function validateSpec(spec: MethodSpec): string[] {
     if (e.rate !== undefined && (e.rate < 0 || e.rate > 1)) out.push(`사업비 ${e.group}/${e.basis} = ${e.rate} 는 범위(0~100%) 밖입니다`);
   }
   for (const id of spec.basis.waiverRateIds ?? []) if (!spec.rates.some((r) => r.id === id)) out.push(`납입면제 사유 위험률(${id})이 목록에 없습니다`);
+  for (const c of spec.combos ?? []) for (const id of c.rateIds) if (!spec.rates.some((r) => r.id === id)) out.push(`위험률 합성 "${c.name ?? c.id}"의 위험률(${id})이 목록에 없습니다`);
   for (const b of spec.benefits) {
     if (b.multiple !== undefined && (b.multiple <= 0 || b.multiple > 100)) out.push(`담보 "${b.name}"의 보장금액 배수 ${b.multiple} 는 범위(0~100배) 밖입니다`);
     if (b.waitPayRatio !== undefined && (b.waitPayRatio < 0 || b.waitPayRatio > 1)) out.push(`담보 "${b.name}"의 면책·삭감 지급 비율 ${b.waitPayRatio} 는 범위(0~100%) 밖입니다`);
-    if (b.rateId && !spec.rates.some((r) => r.id === b.rateId)) out.push(`담보 "${b.name}"의 급부 위험률(${b.rateId})이 목록에 없습니다`);
+    if (b.rateId && !spec.rates.some((r) => r.id === b.rateId) && !spec.combos?.some((c) => c.id === b.rateId)) out.push(`담보 "${b.name}"의 급부 위험률(${b.rateId})이 목록에 없습니다`);
     for (const id of b.exitRateIds ?? []) if (!spec.rates.some((r) => r.id === id)) out.push(`담보 "${b.name}"의 탈퇴 위험률(${id})이 목록에 없습니다`);
   }
   return out;

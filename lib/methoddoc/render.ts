@@ -1,4 +1,4 @@
-import { amountLabel, benefitModels, daysLabel, pvbLines, survivorModels, type BenefitModel } from "./formulas";
+import { amountLabel, benefitModels, comboModels, daysLabel, pvbLines, survivorModels, type BenefitModel } from "./formulas";
 import { coverTerms, endAgeLabel, hasContract, hasProduct, RATE_ROLE_LABEL, unitNames, unitOf, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
@@ -171,7 +171,20 @@ function symbolBlocks(spec: MethodSpec): DocBlock[] {
     ...(lapse ? [["w_{x+t}", "적용해지율 (가.(3))"] as [string, string]] : []),
     ...(lapse && spec.basis.lowRatio !== undefined ? [["ρ", "납입기간 중 해지환급금 비율 (가.(3) — 무해지 0)"] as [string, string]] : []),
   ];
-  return [table(["기호", "뜻"], rows.map((r) => [r, undefined]))];
+  return [table(["기호", "뜻"], rows.map((r) => [r, undefined])), ...comboBlocks(spec)];
+}
+
+/**
+ * 위험률 합성 — 기호의 정의 첫 표 아래. 유지자의 대상 위험률·보험금의 급부 위험률이 이 기호(Q^{(j)} · R^{(j)})를 가져다 쓰고,
+ * 유지자·보험금 표에는 합성 식을 싣지 않는다. 행: 기호 · 이름 · 식 (사망과 질병 여럿을 묶으면 안의 질병 곱 R 행이 먼저)
+ */
+function comboBlocks(spec: MethodSpec): DocBlock[] {
+  const combos = comboModels(spec);
+  if (!combos.length) return [];
+  return [{ t: "p", text: "위험률 합성", path: "combos" }, table(["기호", "이름", "식"], combos.flatMap((c) => c.rows.map((r): [string[], string] => [
+    [`${r.sym}_x`, r.label, r.line],
+    [c.index >= 0 ? `combos[${c.index}]` : "combos", `combo:${c.id}`, ...c.rates.map((x) => `rates[${spec.rates.indexOf(x)}]`)].join("|"),
+  ])))];
 }
 
 /** 산출방법서 본문 */
@@ -295,8 +308,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       const pv = `${D}_{x+t} = l${sup}_{x+t}·v^t · ${N}_{x+t} = Σ_{u≥t} ${D}_{x+u}${pay && multiUnit ? ` — 납입: ${sv.payUnits.join(" · ")}` : ""}`;
       const rows: [string[], string | undefined][] = [
         ...(sv.unit ? [[["계약 단위", sv.unit], path] as [string[], string | undefined]] : []),
-        ...(sv.cells.ill ? [[["질병 발생률", sv.cells.ill], path] as [string[], string | undefined]] : []),
-        [["대상 위험률", sv.cells.rate], path],
+        [["대상 위험률", sv.cells.rate], sv.combo ? `${path}|combo:${sv.combo.combo.id}` : path],
         [["계산기수", sv.cells.recur], path],
         [["현가누계", pv], path],
       ];
@@ -321,8 +333,8 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
         const rows: [string[], string][] = [
           ...(b.unit ? [[["계약 단위", b.unit], at("unit")] as [string[], string]] : []),
           [["대상자수", `l${sup}_{x+t}`], at("survivorId", "exitRateIds")],
-          [["계산기수", `d${sup}_{x+t} = l${sup}_{x+t} × ${m.ev}`], at("rateId", "role")],
-          [["계산기수", `C_{x+t} = d${sup}_{x+t} × v^{t+½} · M_{x+t} = Σ_{u≥t} C_{x+u}`], at()],
+          [["계산기수", `d${sup}_{x+t} = l${sup}_{x+t} × ${m.ev}`], [at("rateId", "role"), ...(m.combo ? [`combo:${m.combo.combo.id}`] : [])].join("|")],
+          [["현가 및 누계", `C_{x+t} = d${sup}_{x+t} × v^{t+½} · M_{x+t} = Σ_{u≥t} C_{x+u}`], at()],
         ];
         return [
           { t: "p", text: `(${n + 1}) ${b.name}`, path: at("name") },
@@ -438,7 +450,7 @@ h2{font-size:13pt;margin-top:22px;border-bottom:1px solid #ccc;padding-bottom:3p
 h3{font-size:11.5pt;margin-top:16px;break-after:avoid}
 table{border-collapse:collapse;width:100%;margin:8px 0;font-size:9.5pt;break-inside:avoid}
 th,td{border:1px solid #bbb;padding:4px 7px;text-align:left;vertical-align:top;word-break:keep-all}
-th{background:#f0f2f5;font-weight:600}td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+th{background:#f0f2f5;font-weight:600;text-align:center}td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 table.wide{font-size:7.8pt}table.wide th,table.wide td{padding:3px 4px}
 blockquote{border-left:3px solid #4a90c2;margin:8px 0;padding:2px 12px;color:#444;background:#f7f9fb}
 pre,.formula{background:#f6f7f9;padding:8px 10px;white-space:pre-wrap;font-size:10pt;overflow-x:auto}

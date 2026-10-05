@@ -156,17 +156,21 @@ const WIDTH = 9800;   // A4 본문 폭(twip)
 
 function table(head: string[], rows: (string | number)[][], shade = "EEF1F5"): string {
   const small = head.length >= 8 ? '<w:sz w:val="16"/><w:szCs w:val="16"/>' : "";
-  const cell = (c: string | number, h: boolean, mid: boolean) =>
+  // 짧은 표는 한 쪽에 — 행마다 다음 행과 붙여 둔다(마지막 행 빼고). 쪽에서 갈린 한 행은 PDF 로 되읽을 때 표가 아니라 문단이 된다
+  const keep = rows.length <= 20;
+  const cell = (c: string | number, h: boolean, mid: boolean, next = keep) =>
     `<w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/>${h ? `<w:shd w:val="clear" w:color="auto" w:fill="${shade}"/>` : ""}</w:tcPr>` +
-    `<w:p><w:pPr><w:spacing w:before="30" w:after="30"/>${mid ? '<w:jc w:val="center"/>' : ""}</w:pPr>${richRuns(String(c), (h ? "<w:b/>" : "") + small)}</w:p></w:tc>`;
+    `<w:p><w:pPr>${next ? "<w:keepNext/>" : ""}<w:spacing w:before="30" w:after="30"/>${mid ? '<w:jc w:val="center"/>' : ""}</w:pPr>${richRuns(String(c), (h ? "<w:b/>" : "") + small)}</w:p></w:tc>`;
   // 2칸 표(항목 | 내용 · 담보 세로 표 · 기호의 정의)는 첫 칸을 좁게
-  const cols = head.length === 2 ? [Math.round(WIDTH * 0.3), WIDTH - Math.round(WIDTH * 0.3)] : head.map(() => Math.floor(WIDTH / head.length));
+  // 위험률 합성 표(기호 | 이름 | 식)는 식 칸을 넓게 — 칸 안에서 줄이 바뀌지 않게(PDF 로 되읽을 때 행이 갈리지 않게)
+  const share = head.length === 2 ? [0.3, 0.7] : head.join("|") === "기호|이름|식" ? [0.12, 0.3, 0.58] : head.map(() => 1 / head.length);
+  const cols = share.map((x) => Math.floor(WIDTH * x));
   return `<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders>${BORDER}</w:tblBorders>` +
     `<w:tblCellMar><w:left w:w="140" w:type="dxa"/><w:right w:w="180" w:type="dxa"/></w:tblCellMar></w:tblPr>` +
     `<w:tblGrid>${cols.map((w) => `<w:gridCol w:w="${w}"/>`).join("")}</w:tblGrid>` +
-    `<w:tr><w:trPr><w:tblHeader/></w:trPr>${head.map((h) => cell(h, true, false)).join("")}</w:tr>` +
+    `<w:tr><w:trPr><w:tblHeader/></w:trPr>${head.map((h) => cell(h, true, true)).join("")}</w:tr>` +
     // 숫자 칸은 가운데(3칸 이상 표) — 한글은 오른쪽 여백을 무시해 오른쪽 정렬 값이 테두리에 붙는다. 2칸 표(항목 | 내용)는 모두 왼쪽
-    rows.map((r) => `<w:tr>${r.map((c, i) => cell(c, false, head.length >= 3 && i > 0 && isNumericCell(c))).join("")}</w:tr>`).join("") +
+    rows.map((r, j) => `<w:tr>${r.map((c, i) => cell(c, false, head.length >= 3 && i > 0 && isNumericCell(c), keep && j < rows.length - 1)).join("")}</w:tr>`).join("") +
     `</w:tbl>${para("")}`;
 }
 

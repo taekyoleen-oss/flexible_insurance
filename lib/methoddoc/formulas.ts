@@ -1,4 +1,4 @@
-import { coverTerms, unitNames, unitOf, waiverRates, WHOLE_LIFE_AGE, type BenefitSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
+import { coverTerms, unitNames, unitOf, waiverRates, WHOLE_LIFE_AGE, type BenefitSpec, type ComboSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
 
 /**
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
@@ -154,6 +154,93 @@ export function compactSurvivors(spec: MethodSpec): MethodSpec {
   return view(d) === view(survivorsOf(synced)) ? plain : synced;
 }
 
+// ── 위험률 합성 ──────────────────────────────────────────────────────────────
+/** 합성 이름 — 사유를 잇는다: "사망·80% 이상 장해 결합" */
+export const comboLabel = (rates: RateRef[]) => `${rates.map(reasonOf).join("·")} 결합`;
+
+/** 급부 위험률(rateId)이 위험률 합성이면 그 합성 */
+export const comboOfId = (spec: MethodSpec, id?: string) => (id ? combosOf(spec).find((c) => c.id === id) : undefined);
+
+/**
+ * 위험률 합성 목록 — 조건에 적힌 것(combos), 그 뒤에 유지자의 대상 위험률 · 보험금의 급부 사유 가운데 둘 이상을 묶었는데
+ * 아직 합성이 없는 것(옛 조건 · 다른 앱의 JSON). 위험률 차례는 위험률 표의 차례로 맞춘다.
+ */
+export function combosOf(spec: MethodSpec): ComboSpec[] {
+  const order = (ids: string[]) => spec.rates.map((r) => r.id).filter((id) => ids.includes(id));
+  const list: ComboSpec[] = (spec.combos ?? []).map((c) => ({ ...c, rateIds: order(c.rateIds) }));
+  const has = (ids: string[]) => list.some((c) => idsKey(c.rateIds) === idsKey(ids) || idsKey(illsOf(spec, c.rateIds)) === idsKey(ids));
+  const add = (raw: string[]) => {
+    const ids = order(raw);
+    if (ids.length < 2 || has(ids)) return;
+    let n = list.length + 1;
+    while (list.some((c) => c.id === `c${n}`) || spec.rates.some((r) => r.id === `c${n}`)) n++;
+    list.push({ id: `c${n}`, rateIds: ids });
+  };
+  for (const s of survivorsOf(spec).survivors) add(s.exitRateIds);
+  for (const b of spec.benefits) if (!list.some((c) => c.id === b.rateId)) add(eventCauses(spec, b).map((r) => r.id));
+  return list;
+}
+/** 사망 아닌 위험률만 — 사망과 질병을 함께 묶은 합성은 질병끼리의 곱 R 을 안에 둔다 */
+const illsOf = (spec: MethodSpec, ids: string[]) => ids.filter((id) => { const r = spec.rates.find((x) => x.id === id); return r && r.role !== "death"; });
+
+/** 적힌 위험률 합성이 유지자·보험금에서 만들어지는 것과 같으면 지운다(이름을 준 것 · 보험금이 고른 것은 둔다) — 되읽은 문서가 옛 조건과 같은 모양으로 */
+export function compactCombos(spec: MethodSpec): MethodSpec {
+  if (!spec.combos?.length || spec.combos.some((c) => c.name) || spec.benefits.some((b) => spec.combos!.some((c) => c.id === b.rateId))) return spec;
+  const plain: MethodSpec = { ...spec, combos: undefined };
+  const view = (cs: ComboSpec[]) => JSON.stringify(cs.map((c) => [c.id, idsKey(c.rateIds)]));
+  return view(combosOf(plain)) === view(combosOf(spec)) ? plain : spec;
+}
+
+/** 위험률 합성 하나 — 기호 Q^{(j)}(사망이 들면) · R^{(j)}(질병끼리) 와 정의 식 */
+export interface ComboModel {
+  id: string;
+  j: number;
+  /** 대표 기호 — Q^{(j)} 또는 R^{(j)} */
+  sym: string;
+  /** 사망과 질병 둘 이상을 묶으면 안의 질병 곱 R^{(j)} */
+  ill?: string;
+  label: string;
+  /** 조건에 적힌 합성이면 combos[] 의 자리(아니면 -1) */
+  index: number;
+  rates: RateRef[];
+  syms: { sym: string; rate: RateRef }[];
+  /** 산출방법서 표의 행 — 기호 · 이름 · 식 */
+  rows: { sym: string; label: string; line: string }[];
+  /** 계산에 쓰는 정의 식(행의 식) */
+  lines: string[];
+}
+
+export function comboModels(spec: MethodSpec): ComboModel[] {
+  const symOf = rateSymbols(spec);
+  return combosOf(spec).map((c, i) => {
+    const j = i + 1, sup = `^{(${j})}`;
+    const rates = c.rateIds.map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r);
+    const syms = rates.map((rate) => ({ rate, sym: symOf.get(rate.id) ?? "r" }));
+    const ds = syms.filter((x) => x.rate.role === "death").map((x) => x.sym), is = syms.filter((x) => x.rate.role !== "death").map((x) => x.sym);
+    const label = c.name?.trim() || comboLabel(rates);
+    const rows: ComboModel["rows"] = [];
+    const qd = !ds.length ? "" : ds.length === 1 ? at(ds[0]) : `( ${productText(ds)} )`;
+    if (is.length > 1) rows.push({ sym: `R${sup}`, label: ds.length ? comboLabel(rates.filter((r) => r.role !== "death")) : label, line: `R${sup}_{x+t} = ${productText(is)}` });
+    const R = is.length > 1 ? `R${sup}_{x+t}` : is.length ? at(is[0]) : "";
+    if (qd && R) rows.push({ sym: `Q${sup}`, label, line: `Q${sup}_{x+t} = min( 1, ${withDeath(qd, R)} )` });
+    else if (ds.length > 1) rows.push({ sym: `Q${sup}`, label, line: `Q${sup}_{x+t} = min( 1, ${productText(ds)} )` });
+    else if (!rows.length && syms.length) rows.push({ sym: `${ds.length ? "Q" : "R"}${sup}`, label, line: `${ds.length ? "Q" : "R"}${sup}_{x+t} = ${at(syms[0].sym)}` });
+    const main = rows[rows.length - 1]?.sym ?? `R${sup}`;
+    const index = (spec.combos ?? []).findIndex((x) => x.id === c.id);
+    return { id: c.id, j, sym: main, ...(rows.length > 1 ? { ill: rows[0].sym } : {}), label, index, rates, syms, rows, lines: rows.map((r) => r.line) };
+  });
+}
+/** 위험률 묶음의 합성 기호 — 합성의 대표 기호(같은 묶음) 또는 안의 질병 곱(질병만 같은 묶음) */
+export function comboFor(combos: ComboModel[], spec: MethodSpec, ids: string[]): ComboUse | undefined {
+  const k = idsKey(ids);
+  const hit = (combo: ComboModel, sym: string): ComboUse => ({ combo, sym, lines: combo.lines.slice(0, combo.rows.findIndex((r) => r.sym === sym) + 1) });
+  for (const c of combos) if (idsKey(c.rates.map((r) => r.id)) === k) return hit(c, c.sym);
+  for (const c of combos) if (c.ill && idsKey(illsOf(spec, c.rates.map((r) => r.id))) === k) return hit(c, c.ill);
+  return undefined;
+}
+/** 합성을 가져다 쓰는 자리 — 쓰는 기호와 계산에 함께 실을 정의 식(그 기호까지) */
+export interface ComboUse { combo: ComboModel; sym: string; lines: string[] }
+
 /** 생존자 lx(k) 하나 — 기준 인원 · 결합 탈퇴율(R · Q) · lx · Dx · Nx */
 export interface SurvivorModel {
   id: string;
@@ -161,8 +248,10 @@ export interface SurvivorModel {
   k: number;
   /** "사망, 80% 이상 장해 아닌 유지자" 또는 적은 이름 */
   label: string;
-  /** 산출방법서 유지자 표의 칸 — 질병 결합 R(여럿일 때) · 대상 위험률(결합 Q 식 또는 위험률 하나) · 계산기수(l 의 점화식) */
-  cells: { ill?: string; rate: string; recur: string };
+  /** 산출방법서 유지자 표의 칸 — 대상 위험률(합성 기호 Q^{(j)} 또는 위험률 하나 — 합성 식은 나. 기호의 정의) · 계산기수(l 의 점화식) */
+  cells: { rate: string; recur: string };
+  /** 대상 위험률이 위험률 합성이면 그 합성 */
+  combo?: ComboUse;
   unit?: string;
   /** 그 계약 단위의 보험료 납입기수(N*)에 쓰는지 — 쓰는 단위 */
   payUnits: string[];
@@ -177,7 +266,7 @@ export interface SurvivorModel {
 }
 
 /** 생존자마다 lx(k) 식 — l^{(k)} · Q^{(k)} · R^{(k)} · D^{(k)} · N^{(k)} */
-export function survivorModels(spec: MethodSpec): SurvivorModel[] {
+export function survivorModels(spec: MethodSpec, combos: ComboModel[] = comboModels(spec)): SurvivorModel[] {
   const lapseRate = (spec.basis.lapse ?? []).find((l) => l.rate > 0)?.rate;
   const lapse = lapseRate !== undefined;
   const { survivors, benefitOf, payOf } = survivorsOf(spec);
@@ -186,16 +275,14 @@ export function survivorModels(spec: MethodSpec): SurvivorModel[] {
     const k = i + 1, sup = `^{(${k})}`;
     const exits = s.exitRateIds.map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r);
     const syms = exits.map((rate) => ({ rate, sym: symOf.get(rate.id) ?? "r" }));
-    const deaths = syms.filter((x) => x.rate.role === "death").map((x) => x.sym), ills = syms.filter((x) => x.rate.role !== "death").map((x) => x.sym);
+    const deaths = syms.filter((x) => x.rate.role === "death");
     const legend = syms.map((x) => `${x.sym}_x : ${x.rate.name}`);
     if (lapse) legend.push("w_x : 적용해지율 (납입기간 중)");
     const lines: string[] = ["기준 인원", `l${sup}_x = 100,000`];
-    const qd = !deaths.length ? "" : deaths.length === 1 ? at(deaths[0]) : `( ${productText(deaths)} )`;
-    const R = ills.length > 1 ? `R${sup}_{x+t}` : ills.length ? at(ills[0]) : "";
-    if (ills.length > 1) lines.push("질병 발생률 — 질병끼리는 따로 생긴다고 보고 곱으로 결합한다", `R${sup}_{x+t} = ${productText(ills)}`);
-    let Q = qd || R;
-    if (qd && R) { Q = `Q${sup}_{x+t}`; lines.push("탈퇴율 — 사망과는 겹치는 부분을 절반으로 보고, 1 을 넘지 않는다", `Q${sup}_{x+t} = min( 1, ${withDeath(qd, R)} )`); }
-    else if (deaths.length > 1) { Q = `Q${sup}_{x+t}`; lines.push("탈퇴율", `Q${sup}_{x+t} = min( 1, ${productText(deaths)} )`); }
+    // 둘 이상이면 위험률 합성(나. 기호의 정의) — 계산에 쓰려고 그 정의 식을 함께 싣는다
+    const combo = exits.length > 1 ? comboFor(combos, spec, exits.map((r) => r.id)) : undefined;
+    if (combo) lines.push(`탈퇴율 — 위험률 합성 (${combo.combo.j}) ${combo.combo.label}`, ...combo.lines);
+    const Q = combo ? at(combo.sym) : syms.length ? at(syms[0].sym) : "";
     const expr = !Q ? "1" : lapse ? `1 − ${Q} − w_{x+t} + ${Q}·w_{x+t}/2` : `1 − ${Q}`;
     lines.push("유지자수 — 탈퇴 사유가 생긴 사람을 뺀다", `l${sup}_{x+t+1} = l${sup}_{x+t} × ( ${expr} )`,
       "현가와 누계", `D${sup}_{x+t} = l${sup}_{x+t}·v^t`, `N${sup}_{x+t} = Σ_{u≥t} D${sup}_{x+u}`);
@@ -206,9 +293,8 @@ export function survivorModels(spec: MethodSpec): SurvivorModel[] {
       payUnits.length ? `${payUnits.join(" · ")}의 보험료 납입기수(N*)에 쓴다.` : "",
       !syms.length ? "탈퇴 사유가 없어 기준 인원이 그대로 유지된다." : syms.length && !deaths.length ? "사망은 탈퇴 사유가 아니다 — 사망 시 책임준비금을 지급하므로 질병 발생자만 탈퇴한다." : "",
     ].filter(Boolean);
-    const line = (head: string) => lines.find((l) => l.startsWith(head));
-    const cells = { ...(ills.length > 1 ? { ill: line(`R${sup}_{x+t} =`) } : {}), rate: line(`Q${sup}_{x+t} =`) ?? (Q || "없음"), recur: line(`l${sup}_{x+t+1} =`)!.replace(" × ( 1 )", "") };
-    return { id: s.id, k, label: s.name?.trim() || keepLabel(exits), ...(s.unit ? { unit: s.unit } : {}), payUnits, exits, syms, lapseRate, benefitIdx, legend, lines, cells, note: notes.join(" ") };
+    const cells = { rate: Q || "없음", recur: lines.find((l) => l.startsWith(`l${sup}_{x+t+1} =`))!.replace(" × ( 1 )", "") };
+    return { id: s.id, k, label: s.name?.trim() || keepLabel(exits), ...(s.unit ? { unit: s.unit } : {}), payUnits, exits, syms, lapseRate, benefitIdx, legend, lines, cells, ...(combo ? { combo } : {}), note: notes.join(" ") };
   });
 }
 
@@ -229,6 +315,8 @@ export interface BenefitModel {
   pay: SurvivorModel;
   /** 급부 위험률의 기호 — 따로 고른 위험률(rateId), 아니면 생존자의 탈퇴 사유에서 */
   event?: { sym: string; rate: RateRef };
+  /** 급부 위험률이 위험률 합성이면 그 합성(따로 고른 것 · 질병 여럿) — 계산에는 그 합성의 위험률 계열이 든다 */
+  combo?: ComboUse;
   /** 지급자수에 곱하는 발생률 식 — q_{x+t} · Q^{(k)}_{x+t} · R^{(k)}_{x+t} · r^{(i)}_{x+t} (산출방법서 보험금 표) */
   ev: string;
   legend: string[];
@@ -248,15 +336,16 @@ export const waitMonths = (days?: number) => (days ? Math.round(days / 30.4) : 0
 export function eventRate(spec: MethodSpec, b: BenefitSpec): RateRef | undefined {
   const named = spec.rates.find((r) => r.id === b.rateId);
   if (named) return named;
-  if (b.role === "death") return undefined;
+  if (b.role === "death" || spec.combos?.some((c) => c.id === b.rateId)) return undefined;
   const causes = eventCauses(spec, b);
   return causes.length === 1 ? causes[0] : undefined;
 }
 
-/** 급부를 일으키는 탈퇴 사유 — 따로 고른 급부 위험률이 없으면 사망이 아닌 탈퇴 사유 전부(3대질병 진단처럼 여럿일 수 있다) */
+/** 급부를 일으키는 탈퇴 사유 — 따로 고른 급부 위험률이 없으면 사망이 아닌 탈퇴 사유 전부(3대질병 진단처럼 여럿일 수 있다). 위험률 합성을 골랐으면 그 합성의 사망 아닌 위험률 */
 export function eventCauses(spec: MethodSpec, b: BenefitSpec): RateRef[] {
   if (b.role === "death" || spec.rates.some((r) => r.id === b.rateId)) return [];
-  return (b.exitRateIds ?? []).map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r && r.role !== "death");
+  const picked = b.rateId ? spec.combos?.find((c) => c.id === b.rateId) : undefined;
+  return (picked?.rateIds ?? b.exitRateIds ?? []).map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r && r.role !== "death");
 }
 
 /** 연령 구간 배수 → if 식. 구간이 있으면 덮이지 않은 나이는 0 배다(자유설계보험 stepMultiple 과 같다) */
@@ -291,7 +380,8 @@ export const waitLabel = (b: BenefitSpec) => {
 };
 
 export function benefitModels(spec: MethodSpec): BenefitModel[] {
-  const survs = survivorModels(spec);
+  const combos = comboModels(spec);
+  const survs = survivorModels(spec, combos);
   const { benefitOf, payOf } = survivorsOf(spec);
   const symOf = rateSymbols(spec);
   return spec.benefits.map((b, idx) => {
@@ -307,12 +397,20 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
       event = survivor.syms.find((x) => x.rate === rate) ?? { sym: symOf.get(rate.id) ?? "g", rate };
       if (!survivor.syms.includes(event)) legend.push(`${event.sym}_x : ${rate.name}`);
     }
-    // 사망형은 탈퇴 사유 전부(그 생존자의 결합 Q), 사망 아닌 탈퇴 사유가 여럿이면(3대질병) 그 결합 R
+    // 사망형은 탈퇴 사유 전부(그 유지자의 대상 위험률), 고른 위험률 합성이면 그 기호, 사망 아닌 탈퇴 사유가 여럿이면(3대질병) 그 합성 R
     const causes = eventCauses(spec, b);
-    const own = (q: string) => (survivor.syms.length === 1 ? at(survivor.syms[0].sym) : `${q}${sup}_{x+t}`);
-    const ev = rate ? at(event!.sym) : b.role === "death" ? own("Q") : causes.length > 1 ? `R${sup}_{x+t}` : causes.length ? at(survivor.syms.find((x) => x.rate === causes[0])!.sym) : "g_{x+t}";
+    const pick = combos.find((c) => c.id === b.rateId);
+    let combo: ComboUse | undefined = pick ? { combo: pick, sym: pick.sym, lines: pick.lines } : undefined;
+    if (!rate && !combo && b.role !== "death" && causes.length > 1) combo = comboFor(combos, spec, causes.map((r) => r.id));
+    const one = (r: RateRef) => survivor.syms.find((x) => x.rate === r)?.sym ?? symOf.get(r.id) ?? "g";
+    const ev = rate ? at(event!.sym) : combo ? at(combo.sym)
+      : b.role === "death" ? (survivor.combo ? at(survivor.combo.sym) : survivor.syms.length ? at(survivor.syms[0].sym) : "g_{x+t}")
+      : causes.length ? at(one(causes[0])) : "g_{x+t}";
+    // 합성의 정의 식이 유지자 식에 없으면 보험금 식에 함께 싣는다(계산용)
+    const defined = (x: ComboUse) => [survivor, pay].some((sv) => sv.combo?.lines.some((l) => l.startsWith(`${x.sym}_{x+t} =`)));
     const payout = `d_{x+t} = l${sup}_{x+t}·${ev}${half}`;
     const lines: string[] = [
+      ...(combo && !defined(combo) ? [`급부 위험률 — 위험률 합성 (${combo.combo.j}) ${combo.combo.label}`, ...combo.lines] : []),
       `대상자수 — lx(${survivor.k}) ${survivor.label} 를 가져다 쓴다`, `l_{x+t} = l${sup}_{x+t}`, `D_{x+t} = D${sup}_{x+t}`, `N_{x+t} = N${sup}_{x+t}`,
       `보험료 납입 — 유지자 lx(${pay.k}) (${unitOf(b)} [납입])`, `D′_{x+t} = D${psup}_{x+t}`, `N′_{x+t} = N${psup}_{x+t}`,
     ];
@@ -329,7 +427,7 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
     } else lines.push("보험금 현가 (PVB) — 보장금액 1원당", "PVB = M_x");
     // 급부 위험률을 따로 정한 진단형(암수술 등)은 지급 사유가 탈퇴 사유와 달라 "소멸" 문장이 맞지 않는다
     const note = b.role === "incidence" && !b.rateId ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
-    return { idx, b, survivor, pay, event, ev: `${ev}${half}`, legend, lines, payout, ...(note ? { note } : {}) };
+    return { idx, b, survivor, pay, event, ...(combo ? { combo } : {}), ev: `${ev}${half}`, legend, lines, payout, ...(note ? { note } : {}) };
   });
 }
 
