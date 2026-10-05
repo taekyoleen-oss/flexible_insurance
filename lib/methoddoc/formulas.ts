@@ -149,7 +149,8 @@ export function compactSurvivors(spec: MethodSpec): MethodSpec {
   const d = deriveSurvivors(plain);
   const view = (x: { survivors: SurvivorSpec[]; benefitOf: string[]; payOf: Map<string, string> }) => {
     const key = (id?: string) => { const s = x.survivors.find((y) => y.id === id); return s ? `${idsKey(s.exitRateIds)}@${s.unit?.trim() || MAIN}` : ""; };
-    return JSON.stringify({ n: x.survivors.length, b: x.benefitOf.map(key), p: [...x.payOf].map(([u, id]) => `${u}:${key(id)}`).sort() });
+    // 차례도 견준다 — lx(k) 의 k 가 바뀌면 같은 조건이 아니다
+    return JSON.stringify({ s: x.survivors.map((y) => key(y.id)), b: x.benefitOf.map(key), p: [...x.payOf].map(([u, id]) => `${u}:${key(id)}`).sort() });
   };
   return view(d) === view(survivorsOf(synced)) ? plain : synced;
 }
