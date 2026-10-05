@@ -77,6 +77,12 @@ export interface BenefitSpec {
   waitDays?: number;
   /** 면책·삭감 기간 중 지급 비율 — 0 = 면책(지급 없음, 암) · 0.5 = 50% 삭감(특정 사망 등). 없으면 0 */
   waitPayRatio?: number;
+  /**
+   * 면책과 삭감을 함께 둘 때만 — 삭감 기간(일, 계약일부터)과 그 동안의 지급 비율. 이때 waitDays 는 면책(지급 0) 기간이다.
+   * 하나만 있으면 옛 모양(waitDays + waitPayRatio)으로 적는다 — 자유설계보험이 그대로 읽게(coverTerms · withCoverTerms)
+   */
+  reduceDays?: number;
+  reduceRatio?: number;
   /** 급부 위험률 id */
   rateId?: string;
   /** 탈퇴 위험률 id 목록 */
@@ -89,6 +95,19 @@ export interface BenefitSpec {
   unit?: string;
   /** 이 담보가 쓰는 생존자(lx) — survivors[].id. 있으면 탈퇴 위험률(exitRateIds)은 그 생존자의 것으로 맞춘다 */
   survivorId?: string;
+}
+
+/** 보장 표의 칸 — 면책(지급 0) 기간 · 삭감 기간(계약일부터) · 삭감 시 지급률. 옛 모양(waitDays + waitPayRatio > 0)은 삭감으로 읽는다 */
+export function coverTerms(b: BenefitSpec): { wait?: number; reduce?: number; ratio?: number } {
+  if (b.reduceDays) return { wait: b.waitDays, reduce: b.reduceDays, ratio: b.reduceRatio ?? 0.5 };
+  if (b.waitDays && b.waitPayRatio) return { reduce: b.waitDays, ratio: b.waitPayRatio };
+  return b.waitDays ? { wait: b.waitDays } : {};
+}
+/** 보장 표의 칸 → 담보 칸. 하나만 있으면 옛 모양, 면책과 삭감이 함께일 때만 reduceDays · reduceRatio */
+export function coverFields(c: { wait?: number; reduce?: number; ratio?: number }): Pick<BenefitSpec, "waitDays" | "waitPayRatio" | "reduceDays" | "reduceRatio"> {
+  if (c.wait && c.reduce) return { waitDays: c.wait, waitPayRatio: undefined, reduceDays: c.reduce, reduceRatio: c.ratio ?? 0.5 };
+  if (c.reduce) return { waitDays: c.reduce, waitPayRatio: c.ratio ?? 0.5, reduceDays: undefined, reduceRatio: undefined };
+  return { waitDays: c.wait || undefined, waitPayRatio: undefined, reduceDays: undefined, reduceRatio: undefined };
 }
 
 /**

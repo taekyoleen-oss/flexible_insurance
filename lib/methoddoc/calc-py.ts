@@ -125,7 +125,7 @@ function inOrder(cols: Col[]): Col[] {
 function benefitCells(s: CalcSheet, bi: number): PyCell[] {
   const c: Ctx = { series: new Set(s.cols.map((x) => x.sym)), scalars: new Set(s.scalars.map((x) => x.sym)), known: new Set() };
   const pick = (syms: string[]) => syms.map((sym) => s.cols.find((x) => x.sym === sym)).filter((x): x is CalcSheet["cols"][number] => !!x);
-  // 생존자 lx(k) 의 계열(l^{(k)} · Q^{(k)} · R^{(k)} · D^{(k)} · N^{(k)}) — 생존자 단계에서 lx · Dx · Nx 까지 낸다
+  // 유지자 lx(k) 의 계열(l^{(k)} · Q^{(k)} · R^{(k)} · D^{(k)} · N^{(k)}) — 유지자 단계에서 lx · Dx · Nx 까지 낸다
   const SURV = s.cols.filter((x) => x.kind === "series" && /\^\{\(\d+\)\}$/.test(x.sym)).map((x) => x.sym);
   const PEOPLE_ = [...SURV, ...PEOPLE];
   const rest = s.cols.filter((x) => x.kind === "series" && ![...PEOPLE_, ...PV, ...BEN, ...RESERVE].includes(x.sym));
@@ -140,7 +140,7 @@ function benefitCells(s: CalcSheet, bi: number): PyCell[] {
   const rateName = (sym: string) => s.cols.find((x) => x.sym === sym)?.label ?? sym;
   const cells: PyCell[] = [];
   cells.push({ title: `${tag} — 조건과 위험률 계열`, code: [
-    `# ── ${tag} (생존자: ${s.group}) ──`,
+    `# ── ${tag} (유지자: ${s.group}) ──`,
     `# 담보 하나를 독립된 소형 상품으로 본다 — 보장기간 n 과 납입기간 m 은 이 담보의 것`,
     `n = ${s.n}          # 보장기간(년) = min(보험기간, ${input("n_term")?.note ?? ""})`,
     `m = ${s.m}          # 납입기간(년) = min(납입기간, n)`,
@@ -160,13 +160,13 @@ function benefitCells(s: CalcSheet, bi: number): PyCell[] {
   ].join("\n") });
   const w = s.cols.find((x) => x.sym === "w");
   const peopleCode = [
-    `# ── 생존자 lx(k) — 기준 인원 100,000 에서 탈퇴 사유가 생긴 만큼 줄이고 현가 Dx · 누계 Nx 까지 낸다. 이 담보의 l · 지급자수 d 는 그 lx 에서 ──`,
+    `# ── 유지자 lx(k) — 기준 인원 100,000 에서 탈퇴 사유가 생긴 만큼 줄이고 현가 Dx · 누계 Nx 까지 낸다. 이 담보의 l · 지급자수 d 는 그 lx 에서 ──`,
     ...(w ? [`w = ${JSON.stringify(w.values)}   # 적용해지율 (납입기간 중)`] : []),
     ...inOrder([...rest.filter((x) => early.has(x.sym)), ...pick(PEOPLE_)]).flatMap((col) => [...seriesLines(col, c), ""]),
     `print("t, l, d (처음 5줄)")`,
     `for t in range(5): print(t, round(l[t], 2), round(d[t], 4))`,
   ];
-  cells.push({ title: `${tag} — 생존자`, code: peopleCode.join("\n") });
+  cells.push({ title: `${tag} — 유지자`, code: peopleCode.join("\n") });
   cells.push({ title: `${tag} — 현가·누계와 보험금의 현가`, code: [
     `# ── 현가 D·D′ 와 누계 N·N′ (계산기수), 보장금액의 배수 S · 급부 현가 C · 누계 M ──`,
     ...inOrder(pick([...PV, ...BEN, ...rest.filter((x) => !early.has(x.sym)).map((x) => x.sym)])).flatMap((col) => [...seriesLines(col, c), ""]),

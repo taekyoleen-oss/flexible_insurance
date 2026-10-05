@@ -370,7 +370,7 @@ export const PAY_METHODS: [number, string][] = [[12, "월납"], [4, "3개월납"
 
 export interface BenefitResult {
   id: string; name: string;
-  /** 계약 단위(주계약·특약 이름) · 이 담보의 생존자 lx(k) · 보험료(N*)에 쓰는 [납입] 생존자 */
+  /** 계약 단위(주계약·특약 이름) · 이 담보의 유지자 lx(k) · 보험료(N*)에 쓰는 [납입] 유지자 */
   unit: string; group: string; payer: string;
   /** 이 담보의 보장기간(년) · 납입기간(년) */
   n: number; m: number;
@@ -406,16 +406,16 @@ const expenseOf = (spec: MethodSpec, symbol: string) => {
   return e?.rate ?? e?.times ?? 0;
 };
 
-/** 이 담보의 계산에 쓰는 식 — 그 담보의 생존자 lx · 그 계약 단위의 [납입] 생존자, 그 담보의 보험금, 담보마다 같은 현가·보험료·준비금·환급금 */
+/** 이 담보의 계산에 쓰는 식 — 그 담보의 유지자 lx · 그 계약 단위의 [납입] 유지자, 그 담보의 보험금, 담보마다 같은 현가·보험료·준비금·환급금 */
 const KEYS_OF = (m: BenefitModel) => (f: FormulaSpec) =>
   !!f.key && ([`surv:${m.survivor.id}`, `surv:${m.pay.id}`, `benefit:${m.b.id}`].includes(f.key) || /^(pv|premium|reserve|surrender):/.test(f.key));
-/** 그 담보의 계산에 쓰는 위험률 기호 — 생존자 · [납입] 생존자 · 급부 위험률 */
+/** 그 담보의 계산에 쓰는 위험률 기호 — 유지자 · [납입] 유지자 · 급부 위험률 */
 const symsOf = (m: BenefitModel) => [...m.survivor.syms, ...m.pay.syms, ...(m.event ? [m.event] : [])];
-/** 생존자 계열 이름(l^{(k)} · D^{(k)} …)의 뜻 */
+/** 유지자 계열 이름(l^{(k)} · D^{(k)} …)의 뜻 */
 function survivorLabel(name: string): string | undefined {
   const x = /^([lDNQR])\^\{\((\d+)\)\}$/.exec(name);
   if (!x) return undefined;
-  return { l: "생존자수", D: "생존자수의 현가", N: "생존자수 현가의 누계", Q: "결합 탈퇴율", R: "질병 발생률 (곱 결합)" }[x[1]] + ` lx(${x[2]})`;
+  return { l: "유지자수", D: "유지자수의 현가", N: "유지자수 현가의 누계", Q: "결합 탈퇴율", R: "질병 발생률 (곱 결합)" }[x[1]] + ` lx(${x[2]})`;
 }
 
 /**
@@ -548,7 +548,7 @@ export function computeByPayMethod(spec: MethodSpec, contract: CalcContract): { 
 }
 
 /**
- * 생존자 lx(k) 마다 산출 결과 — 그 생존자의 식(생존자수 lx(k) — …)만으로 lx · Dx · Nx 를 연령마다 낸다(조건 화면의 접힌 표).
+ * 유지자 lx(k) 마다 산출 결과 — 그 유지자의 식(유지자수 lx(k) — …)만으로 lx · Dx · Nx 를 연령마다 낸다(조건 화면의 접힌 표).
  * 기간은 그 lx 를 쓰는 담보의 보장기간 가운데 가장 긴 것(쓰는 담보가 없으면 종신까지)
  */
 export function survivorTables(spec: MethodSpec, contract: CalcContract = CALC_DEFAULT): { id: string; k: number; label: string; ages: number[]; l: number[]; D: number[]; N: number[]; error?: string }[] {
@@ -582,9 +582,9 @@ export function checkFormula(f: FormulaSpec): { ok: boolean; skipped: string[] }
 // ── 계산 표 — 엑셀처럼 한 해 한 줄 ──────────────────────────────────────────
 /** 기호의 뜻. 위험률 기호(q · r · f · g)는 조건의 위험률 이름으로 덮어쓴다 */
 const SYM_LABEL: Record<string, string> = {
-  R: "질병 발생률 (질병끼리 곱 결합)", Q: "탈퇴율", F: "납입면제까지 묶은 질병 발생률 (곱 결합)", "Q′": "납입 탈퇴율", w: "적용해지율", l: "생존자수 (이 담보의 lx)", "l′": "납입자수", d: "지급자수 (급부 발생자)",
-  D: "생존자수의 현가 (이 담보의 lx)", "D′": "[납입] 생존자수의 현가", H: "해지자의 현가",
-  N: "생존자수 현가의 누계 (이 담보의 lx)", "N′": "[납입] 생존자수 현가의 누계",
+  R: "질병 발생률 (질병끼리 곱 결합)", Q: "탈퇴율", F: "납입면제까지 묶은 질병 발생률 (곱 결합)", "Q′": "납입 탈퇴율", w: "적용해지율", l: "유지자수 (이 담보의 lx)", "l′": "납입자수", d: "지급자수 (급부 발생자)",
+  D: "유지자수의 현가 (이 담보의 lx)", "D′": "[납입] 유지자수의 현가", H: "해지자의 현가",
+  N: "유지자수 현가의 누계 (이 담보의 lx)", "N′": "[납입] 유지자수 현가의 누계",
   S: "보장금액의 배수", E: "생존 지급 배수", C: "급부 발생자의 현가", M: "보험금 현가의 누계", CSV: "해지급부의 현가 (이 앱은 0)",
   "N*": "연납 환산 납입기수", PVB: "보험금의 현가", "PVB′": "해지급부를 더한 보험금의 현가", P: "순보험료 (1원당)", P_base: "기준연납순보험료",
   G: "영업보험료 (1원당)", "G₁": "1원당 영업보험료 (소수 6자리)", "G_10만": "10만원당 보험료 (원)",

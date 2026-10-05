@@ -1,7 +1,7 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { compactSurvivors, crowdLabel, eventRate, generateFormulas, syncFromSurvivors } from "./formulas";
+import { compactSurvivors, crowdLabel, eventRate, generateFormulas, isAutoKeepLabel, keepLabel, rateSymbols, syncFromSurvivors } from "./formulas";
 import { FORMULA_MARK, NOTE_MARK } from "./render";
-import { emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole, type SurvivorSpec } from "./spec";
+import { coverFields, emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole, type SurvivorSpec } from "./spec";
 
 /**
  * 산출방법서 → MethodSpec. 규칙(표 먼저, 본문 다음)만으로 돌아간다 — LLM 은 선택이다.
@@ -337,7 +337,7 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
       spec.basis.waiverRateIds = ids.length ? ids : undefined;
       add("basis.waiverRateIds", "납입면제 사유", ids.join(", ") || "없음", fx.slice(0, 120), "표준 양식 가.(4)", "high", false);
     }
-    readSurvivorTables(doc, spec, evidence, warnings);
+    if (!readV8(doc, spec, evidence, warnings, paragraphs)) readSurvivorTables(doc, spec, evidence, warnings);
     // 담보의 탈퇴 위험률·납입면제를 생존자에 맞춘 뒤에 식을 견준다(자동 식이 그 칸으로 만들어진다)
     if (spec.survivors?.length) { const synced = syncFromSurvivors(spec); spec.benefits = synced.benefits; spec.basis = synced.basis; }
     // v6 은 담보 표가 식 사이(보험금의 현가 바로 위)에 있다 — 글로 뽑힌 표의 행이 앞 식의 줄로 이어지지 않게 지운다(표는 앞에서 읽었다)
@@ -354,6 +354,124 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   // 생존자가 담보의 탈퇴 위험률·납입면제에서 그대로 만들어지는 것이면 적지 않는다 — 옛 조건과 같은 모양으로 남게
   const out = compactSurvivors(spec);
   return { spec: out, evidence, missing, warnings: [...new Set([...warnings, ...validateSpec(out)])], ...(standard ? { format } : {}) };
+}
+
+/**
+ * 표준 산출방법서 v8 — 유지자 표 · 보험금 표 · 보장 표. 표는 식 위주라 기호(q · r^{(i)} · Q^{(k)} · l^{(k)})로 위험률·유지자를 되짚는다.
+ *  - 유지자 표: "대상 위험률 | Q^{(k)} = … 또는 q_{x+t}" · "계산기수 | l^{(k)}_{x+t+1} = …" · "현가누계 | D′ …(납입이면 D′)". 이름은 앞 문단 "(k) l^{(k)}_x — 이름"
+ *  - 보험금 표: "대상자수 | l^{(k)}_{x+t}" · "계산기수 | d^{(k)} = l^{(k)} × 발생률" — 발생률의 기호로 급부 유형·급부 위험률을 정한다
+ *  - 보장 표: "구분 | (계약 단위) | (보험기간) | 보장금액 배수 | 면책 | 삭감기간 | 삭감 시 지급률" — 보험금 표와 같은 차례
+ * v8 표가 없으면 false (옛 판은 readSurvivorTables · readBenefitTable 이 읽는다)
+ */
+function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warnings: string[], paragraphs: string[]): boolean {
+  const key = (c: string) => squeeze(c).replace(/\s/g, "");
+  type Seg = [string, string][];
+  const cells = (t: Seg, k: string) => t.filter(([x]) => x === k).map(([, v]) => v);
+  // 표 경계가 아니라 행의 흐름으로 나눈다 — PDF 는 문단만 사이에 둔 표들을 한 표로 이어 읽는다.
+  // 유지자 = (계약 단위) · (질병 발생률) · 대상 위험률 · 계산기수 · 현가누계 / 보험금 = (계약 단위) · 대상자수 · 계산기수 · 계산기수
+  const ROW_KEYS = ["계약단위", "질병발생률", "대상위험률", "계산기수", "현가누계", "대상자수"];
+  const keepTabs: Seg[] = [], benTabs: Seg[] = [];
+  let seg: Seg = [];
+  for (const r of doc.tables.flatMap((t) => [t.head, ...t.rows])) {
+    const k = key(r[0] ?? ""), v = (r[1] ?? "").trim();
+    if (k === "구분" && key(v) === "식") continue;                      // 표 머리
+    if (r.length !== 2 || !ROW_KEYS.includes(k)) { seg = []; continue; }
+    seg.push([k, v]);
+    if (k === "현가누계") { keepTabs.push(seg); seg = []; }
+    else if (k === "계산기수" && seg.some(([x]) => x === "대상자수") && seg.filter(([x]) => x === "계산기수").length === 2) { benTabs.push(seg); seg = []; }
+  }
+  const coverTab = doc.tables.find((t) => key(t.head[0] ?? "") === "구분" && t.head.some((h) => key(h) === "보장금액배수"));
+  if (!keepTabs.length && !benTabs.length) return false;
+  // 기호 → 위험률 (문서 전체에서 한 위험률은 한 기호 — rateSymbols 와 같은 차례)
+  const bySym = new Map([...rateSymbols(spec)].map(([id, sym]) => [sym.replace(/[{}\s]/g, ""), id]));
+  /** 식 칸의 기호들 — 첨자 순서·중괄호·빈칸을 고르게 한 뒤 "r_x+t^(1)" 꼴로 찾는다 */
+  const symsIn = (text: string) => [...normFormula(text).matchAll(/([qrQR])_x\+t(?:\^\((\d+)\))?/g)].map((m) => ({ letter: m[1], n: m[2] }));
+  // 첨자 없는 q · r 은 그 글자의 첫 위험률 — 문서에 위험률을 더하면 기호가 r → r^{(1)} · r^{(2)} 로 바뀌는데, 앞서 적힌 칸은 r 그대로다
+  const rateOfSym = (x: { letter: string; n?: string }) => (x.letter === "q" || x.letter === "r" ? bySym.get(x.n ? `${x.letter}^(${x.n})` : x.letter) ?? (x.n ? undefined : bySym.get(`${x.letter}^(1)`)) : undefined);
+  const kOf = (text: string, re: RegExp) => { const m = re.exec(normFormula(text)); return m ? Number(m[1]) : undefined; };
+  // 유지자 이름 — 앞 문단 "(k) l^{(k)}_x — 이름" (첨자 순서는 Word 마다 다르다)
+  const names = new Map<number, string>();
+  for (const p of paragraphs) {
+    const m = /^\(\d+\)\s*l(?:\^\{?\((\d+)\)\}?_\{?x\}?|_\{?x\}?\^\{?\((\d+)\)\}?)\s*[—–-]+\s*(.+)$/.exec(p.trim());
+    if (m) names.set(Number(m[1] ?? m[2]), m[3].trim());
+  }
+  const units = new Set<string>();
+  const survivors: (SurvivorSpec & { payAll?: boolean })[] = [];
+  keepTabs.forEach((t, i) => {
+    const k = kOf(cells(t, "계산기수").join(" "), /l_x\+t\+1\^\((\d+)\)/) ?? i + 1;
+    const rateText = [...cells(t, "질병발생률"), ...cells(t, "대상위험률")].join(" ");
+    const exits = /^없음$/.test(cells(t, "대상위험률")[0] ?? "") ? [] : spec.rates.map((r) => r.id).filter((id) => symsIn(rateText).some((x) => rateOfSym(x) === id));   // 위험률 표의 차례로
+    const lost = symsIn(rateText).filter((x) => (x.letter === "q" || x.letter === "r") && !rateOfSym(x));
+    if (lost.length) warnings.push(`유지자 lx(${k}) 의 기호 ${[...new Set(lost.map((x) => (x.n ? `${x.letter}^{(${x.n})}` : x.letter)))].join(" · ")} 에 맞는 위험률이 가.(2) 예정위험률 표에 없습니다 — 위험률 행을 지웠다면 유지자 표의 대상 위험률도 고치세요`);
+    const pv = cells(t, "현가누계").join(" "), pay = /D[′'’]/.test(pv);
+    const payList = /납입\s*:\s*(.+)$/.exec(pv)?.[1].split(/\s*·\s*/).map((x) => x.trim()).filter(Boolean);
+    const unit = cells(t, "계약단위")[0];
+    const name = names.get(k);
+    // 기호는 위험률 표의 차례로 되짚는다 — 행을 지우거나 순서를 바꾸면 다른 위험률을 가리킬 수 있어, 이름(탈퇴 사유)과 견준다
+    const flat = (x: string) => x.replace(/[^가-힣A-Za-z0-9]/g, "");
+    if (name && isAutoKeepLabel(name) && / 아닌 유지자$/.test(name) && flat(name) !== flat(keepLabel(exits.map((id) => spec.rates.find((r) => r.id === id)!))))
+      warnings.push(`유지자 lx(${k}) 의 이름(${name})과 대상 위험률의 기호가 가리키는 위험률(${exits.map((id) => spec.rates.find((r) => r.id === id)!.name).join(" · ") || "없음"})이 맞지 않습니다 — 위험률 표의 행을 지우거나 순서를 바꿨다면 유지자 표의 기호도 고치세요`);
+    survivors.push({ id: `s${k}`, ...(name && !isAutoKeepLabel(name) ? { name } : {}), ...(unit ? { unit } : {}), exitRateIds: exits,
+      ...(payList ? { payFor: payList } : {}), ...(pay && !payList ? { payAll: true } : {}) });
+    evidence.push({ path: `survivors[${survivors.length - 1}]`, label: "유지자", value: `lx(${k})`, raw: t.map((r) => r.join(" ")).join(" | ").slice(0, 160), source: "유지자 표", confidence: "high" });
+  });
+  // 보장 표 — 보험금 표와 같은 차례
+  const ch = coverTab ? coverTab.head.map(key) : [];
+  const col = (k: string) => ch.findIndex((h) => h.startsWith(k));
+  const days = (s: string) => { const d = /(\d+)\s*일/.exec(s), y = /(\d+)\s*년/.exec(s); return d ? Number(d[1]) : y ? Number(y[1]) * 365 : undefined; };
+  const coverRows = coverTab?.rows.filter((r) => (r[0] ?? "").trim()) ?? [];
+  const n = Math.max(benTabs.length, coverRows.length);
+  for (let i = 0; i < n; i++) {
+    const t = benTabs[i], row = coverRows[i];
+    const get = (k: string) => (row && col(k) >= 0 ? (row[col(k)] ?? "").trim() : "");
+    const name = (row?.[0] ?? "").trim() || `보험금 ${i + 1}`;
+    const unit = get("계약단위") || (t ? cells(t, "계약단위")[0] : "") || "";
+    const k = t ? kOf(cells(t, "대상자수").join(" "), /l_x\+t\^\((\d+)\)/) : undefined;
+    const sv = survivors.find((x) => x.id === `s${k}`);
+    const dText = t ? cells(t, "계산기수").find((c) => /^d/.test(c.trim())) ?? "" : "";
+    const evText = dText.split(/[×·]/).slice(1).join(" ").trim();
+    const ev = symsIn(evText);
+    // 기호 대신 위험률 이름을 적었으면 그 위험률 — 위험률 표에 없으면 더하고 알린다(유형은 이름으로 어림)
+    let named: RateRef | undefined;
+    if (!ev.length && evText && !/[=_^]/.test(evText)) {
+      named = spec.rates.find((r) => r.name === evText);
+      if (!named) {
+        named = { id: `r${spec.rates.length + 1}`, name: evText, role: roleOf(evText) === "lapse" ? "other" : roleOf(evText) };
+        spec.rates.push(named);
+        evidence.push({ path: `rates[${spec.rates.length - 1}]`, label: "위험률", value: evText, raw: dText.slice(0, 120), source: "보험금 표", confidence: "medium" });
+        warnings.push(`보험금 "${name}" 의 위험률 "${evText}" 이(가) 1.2. 위험률 표에 없어 "${RATE_ROLE_LABEL[named.role]}" 유형으로 더했습니다 — 유형·근거를 확인하세요`);
+      }
+    }
+    const evRate = named?.id ?? ev.map(rateOfSym).find(Boolean), rate = spec.rates.find((r) => r.id === evRate);
+    const combined = ev.some((x) => x.letter === "Q"), ill = ev.some((x) => x.letter === "R");
+    const role: BenefitSpec["role"] = combined ? "death" : ill ? "incidence" : rate?.role === "death" ? "death" : rate?.role === "recurring" ? "recurring" : "incidence";
+    const bs: BenefitSpec = { id: `b${spec.benefits.length + 1}`, name, role, ...(unit && unit !== "주계약" ? { unit } : {}),
+      ...(sv ? { survivorId: sv.id, ...(sv.exitRateIds.length ? { exitRateIds: [...sv.exitRateIds] } : {}) } : {}) };
+    const mult = get("보장금액배수");
+    if (/원/.test(mult)) { const a = numIn(mult); if (a !== null) bs.amount = a; }
+    else if (mult && mult !== "—") { const v = Number(mult.replace(/배$/, "")); if (Number.isFinite(v)) bs.multiple = v; }
+    const end = /(\d+)\s*세/.exec(get("보험기간"));
+    if (end) bs.endAge = Number(end[1]);
+    const ratio = /([\d.]+)\s*%/.exec(get("삭감시"));
+    Object.assign(bs, Object.fromEntries(Object.entries(coverFields({ wait: days(get("면책")), reduce: days(get("삭감기간")), ratio: ratio ? Number(ratio[1]) / 100 : undefined })).filter(([, v]) => v !== undefined)));
+    // 급부 위험률 — 유지자의 탈퇴 사유에서 정해지는 것과 다를 때만 따로 적는다(일당형 · 암수술 등)
+    if (rate && !combined && !ill) {
+      const auto = role === "death" ? (sv?.exitRateIds.length === 1 ? sv.exitRateIds[0] : undefined) : eventRate(spec, { ...bs, rateId: undefined })?.id;
+      if (rate.id !== auto) bs.rateId = rate.id;
+    }
+    if (!t) warnings.push(`보장 "${name}" 의 보험금 표(대상자수 · 계산기수)가 없어 대상자수를 정하지 못했습니다 — 보험금 카드에서 고르세요`);
+    spec.benefits.push(bs);
+    units.add(unit || "주계약");
+    evidence.push({ path: `benefits[${spec.benefits.length - 1}]`, label: "보험금", value: name, raw: [...(row ? [row.join(" | ")] : []), ...(t ? t.map((r) => r.join(" ")) : [])].join(" | ").slice(0, 160), source: "보험금·보장 표", confidence: "high" });
+  }
+  // 보험기간을 적지 않은 보장은 가입 조건의 그 계약 단위 보험기간(하나일 때)
+  for (const b of spec.benefits) if (b.endAge === undefined) {
+    const ages = [...new Set((spec.product?.terms ?? []).filter((r) => (r.label?.trim() && !/^주계약/.test(r.label.trim()) ? r.label.trim() : "주계약") === (b.unit ?? "주계약"))
+      .map((r) => /(\d+)\s*세/.exec(r.term ?? "")?.[1]).filter(Boolean).map(Number))];
+    if (ages.length === 1) b.endAge = ages[0];
+  }
+  spec.survivors = survivors.sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))).map(({ payAll, ...x }) => (payAll ? { ...x, payFor: [...units] } : x));
+  return true;
 }
 
 /**
@@ -421,6 +539,7 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   const extras: ExtraSection[] = [], reserve: string[] = [], surrender: string[] = [];
   let kind: Kind = "known", title = "", extra: ExtraSection | null = null;
   let cur: Read | null = null;
+  const autoLabels = new Set(generateFormulas(spec).map((f) => f.label));
   const flush = () => { if (cur?.lines.length) read.push(cur); cur = null; };
   for (const raw of paragraphs) {
     const t = raw.trim();
@@ -454,10 +573,14 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
       else stepBen.points = [...stepNote[3].matchAll(/(\d+)\s*세\s*([\d.]+)\s*배/g)].map((x) => ({ age: +x[1], multiple: +x[2] }));
       continue;
     }
+    // v8: 유지자·보험금 항목 머리 "(1) 사망" · "(2) l^{(2)}_x — …" — 앞 식의 줄로 잇지 않는다
+    if (/^\(\d+\)\s/.test(t)) { flush(); continue; }
     if (cur) {
       if (note !== null) { cur.note = cur.note ? `${cur.note} ${note}` : note; continue; }
       // Word 는 긴 식을 여러 줄로 나눈다(wrapEquation) — 연산자로 시작하는 줄은 앞줄의 이어짐이다
-      if (!cur.note && cur.lines.length && /^[+−×·/]\s/.test(t)) { cur.lines[cur.lines.length - 1] += ` ${t}`; continue; }
+      if (!cur.note && cur.lines.length && /^[+−\-×·/]\s/.test(t)) { cur.lines[cur.lines.length - 1] += ` ${t}`; continue; }
+      // "[식]" 표시를 지운 자동 식 제목("순보험료 (P)") — 앞 식에 붙이지 않고 새 식으로 연다
+      if (!t.includes("=") && autoLabels.has(t)) { flush(); cur = { section: title || "기타", label: t, text: "", lines: [] }; continue; }
       if (!cur.note) { cur.lines.push(t); continue; }
       flush();                                   // 설명 다음 글은 식이 아니다
     }
@@ -492,18 +615,21 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   const V4_AUTO = /^(유지자수·납입자수 — |보험금의 현가 — |(유지자수·납입자수의 현가 \(D · D′\)|해지자의 현가 \(W\)|현가의 누계 \(N · N′\)|연납 환산 납입기수 \(N\*\)|순보험료 \(P\)|기준연납순보험료|영업보험료|저해지·무해지환급형|준비금 산출용 순보험료|연말 책임준비금|해약공제|해약공제 기준 신계약비|표준형 해지환급금|저해지·무해지환급형 해지환급금|환급률|납입누계)$)/;
   //  v6 → v7: 유지자수·납입자수가 "생존자수 lx(k)" 로 합쳐지고 보험금의 현가가 "보험금 — " 이 되었다. 현가 식(D · N · D′ · N′)은 생존자 식 안으로
   const oldLayout = /v[1-6]\s*$/.test(format);
+  //  v7 → v8: 생존자 → 유지자(식은 표가 대신한다), 보험료 절의 ※ 덧붙임을 줄였다 — v7 의 생존자 식은 건너뛰고 식 줄만 견준다
+  const v7 = /v7\s*$/.test(format);
   const OLD_AUTO = /^(유지자수 — |납입자수 — |보험금의 현가 — |(납입자수의 현가와 누계 \(D′ · N′\)|유지자수의 현가와 누계 \(D · N\)|연납 환산 납입기수 \(N\*\)|해지자의 현가 \([HW]\)))/;
   spec.formulas = read.filter((f) => {
     if (v1 && V1_AUTO.test(f.label)) return false;
     if (v2 && V2_AUTO.test(f.label)) return false;
     if (v4 && V4_AUTO.test(f.label)) return false;
     if (oldLayout && OLD_AUTO.test(f.label)) return false;
+    if (v7 && /^생존자수 lx\(\d+\) — /.test(f.label)) return false;
     // 집단 식 제목이 "유지자(…X)" · "납입자(…X)" 로 바뀌기 전(2026-10-02)의 자동 식 — 지금 자동 식에 같은 제목이 없으면 옛 자동 식이다
     if (/^(유지자수|납입자수) — /.test(f.label) && !/(유지자|납입자)\(/.test(f.label) && !auto.some((a) => a.label === f.label)) return false;
     // v3 → v4 는 절 이름만 바뀌었다(제목은 그대로) — 절 이름을 지금 것으로 옮겨 자동 식과 맞춘다
     if (v3) { const a0 = auto.find((x) => x.label === f.label); if (a0) f.section = a0.section; }
     const a = auto.find((x) => x.section === f.section && x.label === f.label);
-    if (v5) return !a || !same(eqs(a.text), eqs(f.lines.join("\n")));
+    if (v5 || v7) return !a || !same(eqs(a.text), eqs(f.lines.join("\n")));
     return !a || !same(a.text, f.lines.join("\n")) || !same(a.note, f.note);
   }).map(({ lines, ...f }) => ({ ...f, text: lines.join("\n") }));
   const push = (path: string, label: string, value: string) =>

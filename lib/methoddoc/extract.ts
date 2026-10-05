@@ -148,12 +148,22 @@ function hwpText(xml: string, cs: { sub: Set<string>; sup: Set<string> }): strin
   return unbrace(out.replace(/\s+/g, " ").trim());
 }
 
+/**
+ * 변경 내용 추적을 받아들인 모양으로 — 지운 글자(w:del · w:moveFrom)와 지운 표 행(w:trPr 안의 w:del)을 뺀다.
+ * 고친 산출방법서를 추적한 채로 올려도 지운 식·지운 이름이 조건에 섞이지 않게(넣은 글자 w:ins 는 그대로 남는다)
+ */
+export function acceptChanges(xml: string): string {
+  return xml
+    .replace(/<w:tr\b[^>]*>(?:(?!<\/w:tr>)[\s\S])*?<w:trPr>(?:(?!<\/w:trPr>)[\s\S])*?<w:del\b[^>]*\/>[\s\S]*?<\/w:tr>/g, "")
+    .replace(/<w:(del|moveFrom)\b[^>]*[^/]>[\s\S]*?<\/w:\1>/g, "");
+}
+
 /** DOCX — 문단(w:p)과 표(w:tbl) */
 export async function extractDocx(buf: Uint8Array): Promise<ExtractedDoc> {
   const zip = await unzip(buf);
   const doc = zip.get("word/document.xml");
   if (!doc) throw new ExtractError("word/document.xml 이 없습니다 — DOCX 가 아닙니다", "corrupt");
-  const xml = wordMath(dec(doc));
+  const xml = wordMath(acceptChanges(dec(doc)));
   const body = xml.slice(xml.indexOf("<w:body"));
   const tables: DocTable[] = [];
   for (const tbl of tagsOf(body, "w:tbl")) {

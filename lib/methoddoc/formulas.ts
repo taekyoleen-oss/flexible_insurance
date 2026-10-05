@@ -1,4 +1,4 @@
-import { unitNames, unitOf, waiverRates, type BenefitSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
+import { coverTerms, unitNames, unitOf, waiverRates, type BenefitSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
 
 /**
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
@@ -59,6 +59,10 @@ export function rateSymbols(spec: MethodSpec): Map<string, string> {
 /** 이름 — 빠지는 사유에 X: "생존자(사망X, 80% 이상 장해X)" */
 export const crowdLabel = (kind: "생존자" | "유지자" | "납입자", rates: RateRef[]) =>
   `${kind}(${rates.length ? rates.map((r) => `${reasonOf(r)}X`).join(", ") : "빠지는 사유 없음"})`;
+/** 유지자 이름(표준 산출방법서 v8) — "사망, 80% 이상 장해 아닌 유지자" · "사망 아닌 유지자" · "탈퇴 사유 없는 유지자" */
+export const keepLabel = (rates: RateRef[]) => (rates.length ? `${rates.map(reasonOf).join(", ")} 아닌 유지자` : "탈퇴 사유 없는 유지자");
+/** 탈퇴 사유에서 만든 이름인지 — 되읽을 때 사람이 붙인 이름과 가른다(옛 판 "생존자(사망X, …)" 도) */
+export const isAutoKeepLabel = (s: string) => /^생존자\(.*\)$|^유지자\(.*\)$| 아닌 유지자$|^탈퇴 사유 없는 유지자$/.test(s.trim());
 
 const exitsOf = (spec: MethodSpec, b: BenefitSpec) =>
   (b.exitRateIds ?? []).map((id) => spec.rates.find((r) => r.id === id)).filter((r): r is RateRef => !!r);
@@ -155,8 +159,10 @@ export interface SurvivorModel {
   id: string;
   /** lx(k) 의 k — 1 부터 */
   k: number;
-  /** "생존자(사망X, 80% 이상 장해X)" 또는 적은 이름 */
+  /** "사망, 80% 이상 장해 아닌 유지자" 또는 적은 이름 */
   label: string;
+  /** 산출방법서 유지자 표의 칸 — 질병 결합 R(여럿일 때) · 대상 위험률(결합 Q 식 또는 위험률 하나) · 계산기수(l 의 점화식) */
+  cells: { ill?: string; rate: string; recur: string };
   unit?: string;
   /** 그 계약 단위의 보험료 납입기수(N*)에 쓰는지 — 쓰는 단위 */
   payUnits: string[];
@@ -191,7 +197,7 @@ export function survivorModels(spec: MethodSpec): SurvivorModel[] {
     if (qd && R) { Q = `Q${sup}_{x+t}`; lines.push("탈퇴율 — 사망과는 겹치는 부분을 절반으로 보고, 1 을 넘지 않는다", `Q${sup}_{x+t} = min( 1, ${withDeath(qd, R)} )`); }
     else if (deaths.length > 1) { Q = `Q${sup}_{x+t}`; lines.push("탈퇴율", `Q${sup}_{x+t} = min( 1, ${productText(deaths)} )`); }
     const expr = !Q ? "1" : lapse ? `1 − ${Q} − w_{x+t} + ${Q}·w_{x+t}/2` : `1 − ${Q}`;
-    lines.push("생존자수 — 탈퇴 사유가 생긴 사람을 뺀다", `l${sup}_{x+t+1} = l${sup}_{x+t} × ( ${expr} )`,
+    lines.push("유지자수 — 탈퇴 사유가 생긴 사람을 뺀다", `l${sup}_{x+t+1} = l${sup}_{x+t} × ( ${expr} )`,
       "현가와 누계", `D${sup}_{x+t} = l${sup}_{x+t}·v^t`, `N${sup}_{x+t} = Σ_{u≥t} D${sup}_{x+u}`);
     const benefitIdx = benefitOf.flatMap((id, bi) => (id === s.id ? [bi] : []));
     const payUnits = [...payOf].filter(([, id]) => id === s.id).map(([u]) => u);
@@ -200,7 +206,9 @@ export function survivorModels(spec: MethodSpec): SurvivorModel[] {
       payUnits.length ? `${payUnits.join(" · ")}의 보험료 납입기수(N*)에 쓴다.` : "",
       !syms.length ? "탈퇴 사유가 없어 기준 인원이 그대로 유지된다." : syms.length && !deaths.length ? "사망은 탈퇴 사유가 아니다 — 사망 시 책임준비금을 지급하므로 질병 발생자만 탈퇴한다." : "",
     ].filter(Boolean);
-    return { id: s.id, k, label: s.name?.trim() || crowdLabel("생존자", exits), ...(s.unit ? { unit: s.unit } : {}), payUnits, exits, syms, lapseRate, benefitIdx, legend, lines, note: notes.join(" ") };
+    const line = (head: string) => lines.find((l) => l.startsWith(head));
+    const cells = { ...(ills.length > 1 ? { ill: line(`R${sup}_{x+t} =`) } : {}), rate: line(`Q${sup}_{x+t} =`) ?? (Q || "없음"), recur: line(`l${sup}_{x+t+1} =`)!.replace(" × ( 1 )", "") };
+    return { id: s.id, k, label: s.name?.trim() || keepLabel(exits), ...(s.unit ? { unit: s.unit } : {}), payUnits, exits, syms, lapseRate, benefitIdx, legend, lines, cells, note: notes.join(" ") };
   });
 }
 
@@ -221,6 +229,8 @@ export interface BenefitModel {
   pay: SurvivorModel;
   /** 급부 위험률의 기호 — 따로 고른 위험률(rateId), 아니면 생존자의 탈퇴 사유에서 */
   event?: { sym: string; rate: RateRef };
+  /** 지급자수에 곱하는 발생률 식 — q_{x+t} · Q^{(k)}_{x+t} · R^{(k)}_{x+t} · r^{(i)}_{x+t} (산출방법서 보험금 표) */
+  ev: string;
   legend: string[];
   lines: string[];
   note?: string;
@@ -257,6 +267,12 @@ function stepsText(b: BenefitSpec): string | undefined {
 
 /** 면책·삭감 → 보장금액 배수의 인자. 기간 mo 개월 동안 지급 비율 ratio (면책 0) — 첫해(12개월 안)면 if, 더 길면 해마다 겹치는 만큼 */
 export function waitFactor(b: BenefitSpec): string | undefined {
+  // 면책(지급 0)과 삭감(계약일부터, 지급률 ρ)이 함께 — 그 해에 겹치는 만큼: 1 − 면책 몫 − (1 − ρ)·(삭감 몫 − 면책 몫)
+  if (b.reduceDays) {
+    const c = coverTerms(b), a = waitMonths(c.wait), r = waitMonths(c.reduce), cut = Math.round((1 - (c.ratio ?? 0.5)) * 1e6) / 1e6;
+    const part = (mo: number) => `max( 0, min( 1, ${mo}/12 − t ) )`;
+    return a ? `( 1 − ${part(a)} − ${cut}×( ${part(r)} − ${part(a)} ) )` : `( 1 − ${cut}×${part(r)} )`;
+  }
   const mo = waitMonths(b.waitDays);
   if (!mo) return undefined;
   const ratio = b.waitPayRatio ?? 0;
@@ -264,7 +280,10 @@ export function waitFactor(b: BenefitSpec): string | undefined {
   return mo <= 12 ? `if( t = 0, 1 − ${cut}${mo}/12, 1 )` : `( 1 − ${cut}max( 0, min( 1, ${mo}/12 − t ) ) )`;
 }
 /** 면책·삭감 표기 — "90일 면책" · "2년 50% 삭감" */
+/** 기간 표기 — 365 의 배수면 "2년", 아니면 "90일" */
+export const daysLabel = (d?: number) => (!d ? "없음" : d % 365 === 0 ? `${d / 365}년` : `${d}일`);
 export const waitLabel = (b: BenefitSpec) => {
+  if (b.reduceDays) { const c = coverTerms(b); return `${daysLabel(c.wait)} 면책 · ${daysLabel(c.reduce)} ${Math.round((c.ratio ?? 0.5) * 100)}% 삭감`; }
   if (!b.waitDays) return "없음";
   const days = b.waitDays % 365 === 0 ? `${b.waitDays / 365}년` : `${b.waitDays}일`;
   const ratio = b.waitPayRatio ?? 0;
@@ -294,14 +313,14 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
     const ev = rate ? at(event!.sym) : b.role === "death" ? own("Q") : causes.length > 1 ? `R${sup}_{x+t}` : causes.length ? at(survivor.syms.find((x) => x.rate === causes[0])!.sym) : "g_{x+t}";
     const payout = `d_{x+t} = l${sup}_{x+t}·${ev}${half}`;
     const lines: string[] = [
-      `생존자 — lx(${survivor.k}) ${survivor.label} 를 가져다 쓴다`, `l_{x+t} = l${sup}_{x+t}`, `D_{x+t} = D${sup}_{x+t}`, `N_{x+t} = N${sup}_{x+t}`,
-      `보험료 납입 — 생존자 lx(${pay.k}) (${unitOf(b)} [납입])`, `D′_{x+t} = D${psup}_{x+t}`, `N′_{x+t} = N${psup}_{x+t}`,
+      `대상자수 — lx(${survivor.k}) ${survivor.label} 를 가져다 쓴다`, `l_{x+t} = l${sup}_{x+t}`, `D_{x+t} = D${sup}_{x+t}`, `N_{x+t} = N${sup}_{x+t}`,
+      `보험료 납입 — 유지자 lx(${pay.k}) (${unitOf(b)} [납입])`, `D′_{x+t} = D${psup}_{x+t}`, `N′_{x+t} = N${psup}_{x+t}`,
     ];
     // 보장금액 배수 S — 연령 구간 배수 × 면책·삭감
     const wf = waitFactor(b), steps = stepsText(b);
     const survival = b.role === "other" && !!b.points?.length;
     const parts = [survival ? "0" : steps ?? "1", ...(wf && !survival ? [wf] : [])];
-    lines.push(wf ? `보장금액의 배수 — ${waitLabel(b)}이라 그 동안은 ${b.waitPayRatio ? `${Math.round(b.waitPayRatio * 100)}% 만` : "지급하지 않는다"}` : "보장금액의 배수", `S_t = ${parts.join(" × ")}`);
+    lines.push(wf ? `보장금액의 배수 — ${waitLabel(b)}${b.reduceDays ? "" : `이라 그 동안은 ${b.waitPayRatio ? `${Math.round(b.waitPayRatio * 100)}% 만` : "지급하지 않는다"}`}` : "보장금액의 배수", `S_t = ${parts.join(" × ")}`);
     lines.push(b.role === "death" && !rate ? "급부 발생자 — 탈퇴자 전부가 급부 대상이다" : "급부 발생자", `C_{x+t} = l${sup}_{x+t}·${ev}${half}·v^{t+½}`);
     lines.push("보험금 현가의 누계", "M_{x+t} = Σ_{u=t}^{n−1} S_u·C_{x+u}");
     if (survival) {
@@ -310,7 +329,7 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
     } else lines.push("보험금 현가 (PVB) — 보장금액 1원당", "PVB = M_x");
     // 급부 위험률을 따로 정한 진단형(암수술 등)은 지급 사유가 탈퇴 사유와 달라 "소멸" 문장이 맞지 않는다
     const note = b.role === "incidence" && !b.rateId ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
-    return { idx, b, survivor, pay, event, legend, lines, payout, ...(note ? { note } : {}) };
+    return { idx, b, survivor, pay, event, ev: `${ev}${half}`, legend, lines, payout, ...(note ? { note } : {}) };
   });
 }
 
@@ -329,10 +348,8 @@ export function commonModels(spec: MethodSpec): { key: string; section: string; 
     ...(lapse ? [{ key: "pv:H", section: BEN, label: "해지자의 현가 (H)", path: `${I}|basis.lapse`, lines: ["H_{x+t} = l_{x+t}·w_{x+t}·v^{t+½}"],
       note: "l 은 그 담보가 쓰는 생존자 lx 다." }] : []),
     { key: "pv:NStar", section: PREM, label: "연납 환산 납입기수 (N*)", path: `${I}|expenses`,
-      lines: ["N* = k · [ ( N′_x − N′_{x+m} ) − ( k−1 )/( 2·k )·( D′_x − D′_{x+m} ) ]"],
-      note: "D′ · N′ 은 그 계약 단위의 [납입] 생존자의 D · N 이다. k 는 납입주기별 계수(연납 1, 6개월납 2, 3개월납 4, 월납 12) — 납입방법에 따라 N* 만 달라지고 보험금의 현가는 같다." },
-    { key: "premium:P", section: PREM, label: "순보험료 (P)", path: "benefits", lines: ["P = PVB / N*"],
-      note: "담보마다 그 담보의 보험금 현가 PVB 를 그 계약 단위의 N*([납입] 생존자)로 나눈다. 보장금액 1원당이다." },
+      lines: ["N* = k · [ ( N′_x − N′_{x+m} ) − ( k−1 )/( 2·k )·( D′_x − D′_{x+m} ) ]"] },
+    { key: "premium:P", section: PREM, label: "순보험료 (P)", path: "benefits", lines: ["P = PVB / N*"] },
     { key: "premium:base", section: PREM, label: "기준연납순보험료", path: "benefits|expenses", lines: ["P_base = PVB / ( N′_x − N′_{x+min(n,20)} )"] },
     { key: "premium:G", section: PREM, label: "영업보험료", path: "expenses", lines: [meth
       ? "G = [ P + ( α_S + α_P·P_base )·D′_x/N* + β_S/k + β′·( N_{x+m} − N_{x+n} )/N* ] / ( 1 − β_G − γ )"
@@ -346,7 +363,7 @@ export function commonModels(spec: MethodSpec): { key: string; section: string; 
 }
 
 /** 담보 칸 — 보험금의 현가 식과 산출방법서 담보 표가 이 칸들에 기댄다 */
-export const BENEFIT_FIELDS = ["name", "unit", "role", "endAge", "multiple", "amount", "waitDays", "waitPayRatio", "survivorId", "exitRateIds", "rateId"] as const;
+export const BENEFIT_FIELDS = ["name", "unit", "role", "endAge", "multiple", "amount", "waitDays", "waitPayRatio", "reduceDays", "reduceRatio", "survivorId", "exitRateIds", "rateId"] as const;
 
 // ── 산출방법서에 실을 식 ─────────────────────────────────────────────────────
 export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
@@ -364,10 +381,10 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   for (const sv of survivorModels(spec)) {
     const j = (spec.survivors ?? []).findIndex((x) => x.id === sv.id);
     out.push({
-      section: "생존자", key: `surv:${sv.id}`,
+      section: "유지자", key: `surv:${sv.id}`,
       path: [...(j >= 0 ? [`survivors[${j}]`] : []), ...sv.benefitIdx.flatMap((bi) => [`benefits[${bi}].survivorId`, `benefits[${bi}].exitRateIds`]), ...sv.exits.map(idx),
         ...(sv.payUnits.length ? ["basis.waiver", "basis.waiverRateIds"] : []), ...(lapse ? ["basis.lapse"] : []), "basis.interest"].join("|"),     // 이율 → 현가 Dx · 누계 Nx
-      label: `생존자수 lx(${sv.k}) — ${sv.label}`,
+      label: `유지자수 lx(${sv.k}) — ${sv.label}`,
       text: [...sv.legend, ...(sv.legend.length ? [""] : []), ...sv.lines].join("\n"),
       ...(sv.note ? { note: sv.note } : {}),
     });
@@ -406,10 +423,10 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
   const R = "책임준비금의 계산에 관한 사항", S = "해지환급금의 계산에 관한 사항";
   out.push(
     { section: R, key: "reserve:P", label: "준비금 산출용 순보험료", path: "basis.standardInterest",
-      text: ["납입 후 유지비를 포함한 순보험료 — 납입기간의 [납입] 생존자 현가로 나눈다",
+      text: ["납입 후 유지비를 포함한 순보험료 — 납입기간의 [납입] 유지자 현가로 나눈다",
         `P_β = ( PVB${low ? " + CSV_0" : ""} + β′·( N_{x+m} − N_{x+n} ) ) / ( N′_x − N′_{x+m} )`].join("\n") },
     { section: R, key: "reserve:V", label: "연말 책임준비금", path: "basis.standardInterest", text: [
-      "t 년도 말 책임준비금 (보장금액 1원당) — 장래 보험금의 현가와 장래 유지비의 현가에서 장래 순보험료의 현가를 뺀 것을 t 시점 생존자수의 현가로 나눈다",
+      "t 년도 말 책임준비금 (보장금액 1원당) — 장래 보험금의 현가와 장래 유지비의 현가에서 장래 순보험료의 현가를 뺀 것을 t 시점 유지자수의 현가로 나눈다",
       `V_t = [ M_{x+t}${survival ? " + Σ_{u>t} E_u·D_{x+u}" : ""}${low ? " + CSV_t" : ""} + β′·( N_{x+max(t,m)} − N_{x+n} ) − P_β·( N′_{x+t} − N′_{x+m} )·[t≤m] ] / D_{x+t}`,
       "10만원당 책임준비금 — 원 단위로 반올림",
       "V^{10만}_t = round( V_t × 100,000 )",
