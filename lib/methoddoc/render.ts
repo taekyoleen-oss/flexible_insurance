@@ -1,4 +1,4 @@
-import { amountLabel, benefitModels, daysLabel, survivorModels, type BenefitModel } from "./formulas";
+import { amountLabel, benefitModels, daysLabel, pvbLines, survivorModels, type BenefitModel } from "./formulas";
 import { coverTerms, endAgeLabel, hasContract, hasProduct, RATE_ROLE_LABEL, unitNames, unitOf, type ExpenseItem, type MethodSpec, type ProductInfo, type RateRef, type Sex } from "./spec";
 
 /**
@@ -354,13 +354,11 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
         b.multiple !== undefined ? b.multiple : amountLabel(b), daysLabel(c.wait), c.reduce ? daysLabel(c.reduce) : "—", c.reduce ? pct(c.ratio) : "—",
       ], ["name", "multiple", "amount", "endAge", "waitDays", "waitPayRatio", "reduceDays", "reduceRatio"].map((k) => `benefits[${i}].${k}`).concat("formula:cover").join("|")];
     });
-    // 보장금액의 배수 S_t — 사람이 고친 보험금 식이 있으면 그 식의 S_t 줄(문서와 계산이 같은 식을 쓰게)
-    const sOf = (m: BenefitModel) => spec.formulas.find((f) => f.key === `benefit:${m.b.id}`)?.text.split("\n").find((l) => l.startsWith("S_t =")) ?? m.lines.find((l) => l.startsWith("S_t ="))!;
-    const sLines = bens.flatMap((m) => [m.b.name, sOf(m)]);
     return [
       table(["구분", ...(unitCol ? ["계약 단위"] : []), ...(endCol ? ["보험기간"] : []), "보장금액 배수", "면책", "삭감기간", "삭감 시 지급률"], rows),
-      // 보험금의 현가 — 위 표의 배수·면책·삭감이 S_t 다. 식 제목을 달지 않는다(문서를 되읽을 때 사람이 고친 식으로 들이지 않게 — 계산은 보험금 식이 한다)
-      { t: "formula", path: [...new Set(rows.flatMap((r) => r[1].split("|")))].join("|"), text: [...sLines, "보험금의 현가 — 보장마다", "PVB = Σ_{u=0}^{n−1} S_u·C_{x+u}"].join("\n") },
+      // 보험금의 현가 — 위 표의 배수·면책·삭감으로 M 의 차를 적는다(PVB = 1·M_x · 0.5·( M_{x+0.25} − M_{x+n} ) …).
+      // 식 제목을 달지 않는다(문서를 되읽을 때 사람이 고친 식으로 들이지 않게 — 계산은 보험금 식의 S_t 로 한다)
+      { t: "formula", path: [...new Set(rows.flatMap((r) => r[1].split("|")))].join("|"), text: pvbLines(spec, bens).join("\n") },
     ];
   };
 

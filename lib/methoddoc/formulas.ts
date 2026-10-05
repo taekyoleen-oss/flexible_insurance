@@ -1,4 +1,4 @@
-import { coverTerms, unitNames, unitOf, waiverRates, type BenefitSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
+import { coverTerms, unitNames, unitOf, waiverRates, WHOLE_LIFE_AGE, type BenefitSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
 
 /**
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
@@ -331,6 +331,35 @@ export function benefitModels(spec: MethodSpec): BenefitModel[] {
     const note = b.role === "incidence" && !b.rateId ? "진단 확정 시 지급하고 그 담보는 소멸한다." : undefined;
     return { idx, b, survivor, pay, event, ev: `${ev}${half}`, legend, lines, payout, ...(note ? { note } : {}) };
   });
+}
+
+/**
+ * 산출방법서 마. 보장의 보험금의 현가 — 보장마다 배수 × 누계 M 의 차(사용자 양식 2026-10-05):
+ *   종신 · 면책 없음        1·M_x
+ *   n 년 만기               1·( M_x − M_{x+n} )
+ *   90일 면책               0.5·( M_{x+0.25} − M_{x+n} )      — 면책이 끝난 때부터 (M 은 Σ C, 연 단위 자리는 면책 개월 ÷ 12)
+ *   면책 + 삭감(ρ)          1·( ρ·( M_{x+a} − M_{x+r} ) + M_{x+r} − M_{x+n} )
+ * 문서에 싣는 표시다(계산은 보험금 식의 S_t 로 한다). 연령 구간 배수·생존급부·사람이 S_t 를 고친 보장은 그 S_t 줄과 Σ S_u·C 로 적는다.
+ * spec 은 withFormulas 를 거친 것 — 고친 식(edited)을 알아본다.
+ */
+export function pvbLines(spec: MethodSpec, models: BenefitModel[]): string[] {
+  const sLine = (text?: string) => text?.split("\n").find((l) => l.startsWith("S_t ="));
+  const at = (mo: number) => (!mo ? "M_x" : `M_{x+${mo % 3 === 0 ? String(mo / 12) : `${mo}/12`}}`);
+  const special: string[] = [];
+  const terms = models.map((m) => {
+    const b = m.b, k = b.multiple !== undefined ? `${b.multiple}·` : "";     // 정액(일당 등)은 배수 없이
+    const tail = !b.endAge || b.endAge >= WHOLE_LIFE_AGE ? "" : " − M_{x+n}";
+    const own = spec.formulas.find((f) => f.key === `benefit:${b.id}` && f.edited);
+    const s = sLine(own?.text);
+    if (b.steps?.length || b.points?.length || (s && s !== sLine(m.lines.join("\n")))) {
+      special.push(b.name, s ?? sLine(m.lines.join("\n"))!);
+      return `${k}Σ_{u=0}^{n−1} S_u·C_{x+u}`;
+    }
+    const c = coverTerms(b), a = waitMonths(c.wait), r = waitMonths(c.reduce);
+    const body = r ? `${c.ratio ?? 0.5}·( ${at(a)} − ${at(r)} ) + ${at(r)}${tail}` : `${at(a)}${tail}`;
+    return body === "M_x" ? `${k}M_x` : `${k}( ${body} )`;
+  });
+  return [...special, `PVB = ${terms.join(" + ")}`];
 }
 
 /** 보장금액 표기 — "가입금액의 0.5배" · "50,000,000원" */
