@@ -422,6 +422,7 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
   const survivors: (SurvivorSpec & { payAll?: boolean })[] = [];
   keepTabs.forEach((t, i) => {
     const k = kOf(cells(t, "계산기수").join(" "), /l_x\+t\+1\^\((\d+)\)/) ?? i + 1;
+    if (survivors.some((x) => x.id === `s${k}`)) return;          // 독립특약 부에 다시 실은 같은 유지자 — 한 번만
     const rateText = [...cells(t, "질병발생률"), ...cells(t, "대상위험률")].join(" ");
     const exits = /^없음$/.test(cells(t, "대상위험률")[0] ?? "") ? [] : idsOf(rateText);   // 위험률 표의 차례로 — 합성 기호는 그 위험률들로
     const lost = symsIn(rateText).filter((x) => x.letter !== "Q" && x.letter !== "R" && !STRUCT.test(x.letter) && !rateOfSym(x));

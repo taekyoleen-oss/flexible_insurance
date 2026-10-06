@@ -149,7 +149,7 @@ function productBlocks(p: ProductInfo, withContract: boolean): DocBlock[] {
  * 기호의 정의 — 기간·주기·기초율 기호. 위험률 기호(q · r · f)는 담보별 식의 첫 줄들에서 정의한다.
  * 값은 싣지 않는다(1. 기초율 표가 값이다) — 되읽을 때 같은 값이 두 번 잡히지 않게.
  */
-function symbolBlocks(spec: MethodSpec): DocBlock[] {
+function symbolBlocks(spec: MethodSpec, keepCombo: (id: string) => boolean = () => true): DocBlock[] {
   const lapse = (spec.basis.lapse ?? []).some((l) => l.rate > 0);
   const rows: [string, string][] = [
     ["x", "피보험자의 가입나이"],
@@ -171,15 +171,15 @@ function symbolBlocks(spec: MethodSpec): DocBlock[] {
     ...(lapse ? [["w_{x+t}", "적용해지율 (가.(3))"] as [string, string]] : []),
     ...(lapse && spec.basis.lowRatio !== undefined ? [["ρ", "납입기간 중 해지환급금 비율 (가.(3) — 무해지 0)"] as [string, string]] : []),
   ];
-  return [table(["기호", "뜻"], rows.map((r) => [r, undefined])), ...comboBlocks(spec)];
+  return [table(["기호", "뜻"], rows.map((r) => [r, undefined])), ...comboBlocks(spec, keepCombo)];
 }
 
 /**
  * 위험률 합성 — 기호의 정의 첫 표 아래. 유지자의 대상 위험률·보험금의 급부 위험률이 이 기호(Q^{(j)} · R^{(j)})를 가져다 쓰고,
  * 유지자·보험금 표에는 합성 식을 싣지 않는다. 행: 기호 · 이름 · 식 (사망과 질병 여럿을 묶으면 안의 질병 곱 R 행이 먼저)
  */
-function comboBlocks(spec: MethodSpec): DocBlock[] {
-  const combos = comboModels(spec);
+function comboBlocks(spec: MethodSpec, keepCombo: (id: string) => boolean = () => true): DocBlock[] {
+  const combos = comboModels(spec).filter((c) => keepCombo(c.id));
   if (!combos.length) return [];
   return [{ t: "p", text: "위험률 합성", path: "combos" }, table(["기호", "이름", "식"], combos.flatMap((c) => c.rows.map((r): [string[], string] => [
     [`${r.sym}_x`, r.label, r.line],
@@ -213,44 +213,49 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   let si = 0;
   const sub = (text: string, path?: string): DocBlock => ({ t: "p", kind: "sub", text: `${SUBS[si++] ?? "기타"}. ${text}`, path });
 
-  const basisBlocks: DocBlock[] = [
-    sub("예정기초율", "basis"),
-    { t: "p", text: "(1) 예정이율", path: "basis" },
-    table(["구분", "값"], [
-      [["적용이율 i", pctOf(spec.basis.interest)], "basis.interest"],
-      [["표준이율", pctOf(spec.basis.standardInterest)], "basis.standardInterest"],
-      ...(spec.basis.minGuaranteed !== undefined ? [[["최저보증이율", pctOf(spec.basis.minGuaranteed)], "basis.minGuaranteed"] as [string[], string]] : []),
-      ...(spec.basis.averagePublished !== undefined ? [[["평균공시이율", pctOf(spec.basis.averagePublished)], "basis.averagePublished"] as [string[], string]] : []),
-    ]),
-    { t: "p", text: "(2) 예정위험률", path: "rates" },
-  ];
-  if (spec.rates.length) {
-    basisBlocks.push(table(["위험률", "기호", "유형", "근거·출처", "표"], spec.rates.map((r, i) => [[
-      r.name + (r.adjustment ? ` ${r.adjustment}` : ""),
-      r.id,
-      RATE_ROLE_LABEL[r.role],
-      r.source ?? "—",
-      tableNote(r),
-      // rate:<id> — 보장 카드에서 담보의 위험률을 고르면 이 행만 비친다(rates[i] 는 그 위험률을 쓰는 식까지 모두 비춘다)
-    ], `rates[${i}]|rate:${r.id}`])));
-  } else {
-    basisBlocks.push({ t: "p", text: "위험률이 지정되지 않았습니다.", path: "rates" });
-  }
-  basisBlocks.push({ t: "note", text: "표준위험률이 없는 경우에는 적용위험률을 사용한다." });
-  basisBlocks.push({ t: "p", text: "(3) 적용해지율", path: "basis.lapse" });
-  if (spec.basis.lapse?.length) {
-    basisBlocks.push(table(["구분", "적용해지율", "적용 구간"], spec.basis.lapse.map((l, i) => [[
-      l.label ?? "—", pctOf(l.rate, 1), l.duringPayOnly ? "보험료 납입기간 중 (납입 완료 후 0%)" : "전 기간",
-    ], `basis.lapse[${i}]`])));
-    if (spec.basis.lowRatio !== undefined) {
-      basisBlocks.push({ t: "note", path: "basis.lowRatio", text: `납입기간 중 해지환급금 = 표준형(완전 환급) × ${Math.round(spec.basis.lowRatio * 100)}%${spec.basis.lowRatio === 0 ? " (무해지환급형)" : ""}.` });
+  /** 가. 예정기초율 — (1) 이율 (2) 위험률 (3) 해지율 (4) 사업비. 독립특약의 부도 그 특약이 쓰는 위험률로 다시 싣는다 */
+  const basisFor = (rates: RateRef[], subOf: (text: string, path?: string) => DocBlock): DocBlock[] => {
+    const blocks: DocBlock[] = [
+      subOf("예정기초율", "basis"),
+      { t: "p", text: "(1) 예정이율", path: "basis" },
+      table(["구분", "값"], [
+        [["적용이율 i", pctOf(spec.basis.interest)], "basis.interest"],
+        [["표준이율", pctOf(spec.basis.standardInterest)], "basis.standardInterest"],
+        ...(spec.basis.minGuaranteed !== undefined ? [[["최저보증이율", pctOf(spec.basis.minGuaranteed)], "basis.minGuaranteed"] as [string[], string]] : []),
+        ...(spec.basis.averagePublished !== undefined ? [[["평균공시이율", pctOf(spec.basis.averagePublished)], "basis.averagePublished"] as [string[], string]] : []),
+      ]),
+      { t: "p", text: "(2) 예정위험률", path: "rates" },
+    ];
+    if (rates.length) {
+      blocks.push(table(["위험률", "기호", "유형", "근거·출처", "표"], rates.map((r) => [[
+        r.name + (r.adjustment ? ` ${r.adjustment}` : ""),
+        r.id,
+        RATE_ROLE_LABEL[r.role],
+        r.source ?? "—",
+        tableNote(r),
+        // rate:<id> — 보장 카드에서 담보의 위험률을 고르면 이 행만 비친다(rates[i] 는 그 위험률을 쓰는 식까지 모두 비춘다)
+      ], `rates[${spec.rates.indexOf(r)}]|rate:${r.id}`])));
+    } else {
+      blocks.push({ t: "p", text: "위험률이 지정되지 않았습니다.", path: "rates" });
     }
-  } else basisBlocks.push({ t: "p", text: "적용하지 않음 (w = 0).", path: "basis.lapse" });
-  basisBlocks.push({ t: "p", text: "(4) 예정사업비율", path: "expenses" });
-  basisBlocks.push(spec.expenses.length
-    ? table(["구분", "기호", "기준", "적용사업비율"], spec.expenses.map((e, i) => [[
-        e.group + (e.phase ? ` (${e.phase})` : ""), e.symbol || "—", e.basis, expenseRate(e)], `expenses[${i}]`]))
-    : { t: "p", text: "사업비가 지정되지 않았습니다.", path: "expenses" });
+    blocks.push({ t: "note", text: "표준위험률이 없는 경우에는 적용위험률을 사용한다." });
+    blocks.push({ t: "p", text: "(3) 적용해지율", path: "basis.lapse" });
+    if (spec.basis.lapse?.length) {
+      blocks.push(table(["구분", "적용해지율", "적용 구간"], spec.basis.lapse.map((l, i) => [[
+        l.label ?? "—", pctOf(l.rate, 1), l.duringPayOnly ? "보험료 납입기간 중 (납입 완료 후 0%)" : "전 기간",
+      ], `basis.lapse[${i}]`])));
+      if (spec.basis.lowRatio !== undefined) {
+        blocks.push({ t: "note", path: "basis.lowRatio", text: `납입기간 중 해지환급금 = 표준형(완전 환급) × ${Math.round(spec.basis.lowRatio * 100)}%${spec.basis.lowRatio === 0 ? " (무해지환급형)" : ""}.` });
+      }
+    } else blocks.push({ t: "p", text: "적용하지 않음 (w = 0).", path: "basis.lapse" });
+    blocks.push({ t: "p", text: "(4) 예정사업비율", path: "expenses" });
+    blocks.push(spec.expenses.length
+      ? table(["구분", "기호", "기준", "적용사업비율"], spec.expenses.map((e, i) => [[
+          e.group + (e.phase ? ` (${e.phase})` : ""), e.symbol || "—", e.basis, expenseRate(e)], `expenses[${i}]`]))
+      : { t: "p", text: "사업비가 지정되지 않았습니다.", path: "expenses" });
+    return blocks;
+  };
+  const basisBlocks: DocBlock[] = [];
   // 계약 단위 · 시산 기준 — 계약에 관한 정보라 개요에 둔다(보험료 식과 섞지 않는다)
   if (spec.units.length > 1) {
     out[0].blocks.push({ t: "p", path: "units", text: "주계약과 특약을 따로 산출하고 합친다. 특약은 주계약 조건을 물려받고, 아래 표의 '주계약과 다른 조건'만 달리 적용한다." },
@@ -299,18 +304,33 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   const extraOf = (list: typeof spec.formulas, own: (key: string) => boolean) => list.filter((f) => !f.key || !own(f.key));
   // 부(部) — 주계약과 특약마다 산출방법서를 따로 싣는다(사용자 요청 2026-10-06). 유지자는 그 lx 를 처음 쓰는 계약 단위의 부에
   const MAIN_PART = units[0] ?? "주계약";
-  const partOfSurv = (sv: (typeof survs)[number]) =>
-    units.find((u) => sv.payUnits.includes(u) || sv.benefitIdx.some((i) => unitOf(spec.benefits[i]) === u)) ?? (sv.unit?.trim() || MAIN_PART);
+  const usedIn = (sv: (typeof survs)[number], part: string) => sv.payUnits.includes(part) || sv.benefitIdx.some((i) => unitOf(spec.benefits[i]) === part);
+  /** 그 부의 유지자 — 그 부의 보험금·납입이 쓰는 것(독립특약은 주계약과 같은 유지자라도 그 부에 다시 싣는다). 아무도 안 쓰면 제 단위의 부에 */
+  const partSurvs = (part: string) => survs.filter((sv) => usedIn(sv, part) || (!units.some((u) => usedIn(sv, u)) && (sv.unit?.trim() || MAIN_PART) === part));
+  const multiPart = units.length > 1;
+  /** 그 부가 쓰는 위험률 id · 합성 id — 주계약 부는 어느 부도 안 쓰는 것까지 */
+  const partUse = (part: string) => {
+    const pb = bens.filter((m) => unitOf(m.b) === part), ps = partSurvs(part);
+    const rates = new Set<string>([...ps.flatMap((sv) => sv.exits.map((r) => r.id)), ...pb.flatMap((m) => [...(m.event ? [m.event.rate.id] : []), ...(m.combo?.combo.rates.map((r) => r.id) ?? [])])]);
+    const combos = new Set<string>([...ps.flatMap((sv) => (sv.combo ? [sv.combo.combo.id] : [])), ...pb.flatMap((m) => (m.combo ? [m.combo.combo.id] : []))]);
+    return { rates, combos };
+  };
+  const partRates = (part: string) => {
+    if (!multiPart) return spec.rates;
+    const use = partUse(part), any = units.map(partUse);
+    return spec.rates.filter((r) => use.rates.has(r.id) || (part === MAIN_PART && !any.some((u) => u.rates.has(r.id))));
+  };
+  const partCombo = (part: string) => {
+    if (!multiPart) return () => true;
+    const use = partUse(part), any = units.map(partUse);
+    return (id: string) => use.combos.has(id) || (part === MAIN_PART && !any.some((u) => u.combos.has(id)));
+  };
   const keepList = take(KEEP_SUB), benList = take(BENEFIT_SUB);
 
   const keepBlocks = (part: string): DocBlock[] => {
     const list = keepList;
     const multiUnit = units.length > 1;
-    // 다른 부(주계약)의 유지자를 가져다 쓰면 그것을 밝힌다 — "(k) l^{(k)}_x — 이름" 꼴은 되읽기가 유지자 이름으로 읽으므로 쓰지 않는다
-    const borrowed: DocBlock[] = survs.filter((sv) => partOfSurv(sv) !== part && (sv.payUnits.includes(part) || sv.benefitIdx.some((i) => unitOf(spec.benefits[i]) === part)))
-      .map((sv) => ({ t: "p", path: `formula:surv.${sv.id}`, text: `lx(${sv.k}) ${sv.label} — ${partOfSurv(sv)} 다. 유지자의 것을 쓴다(${[
-        sv.benefitIdx.some((i) => unitOf(spec.benefits[i]) === part) ? "대상자수" : "", sv.payUnits.includes(part) ? "납입 D′ · N′" : ""].filter(Boolean).join(" · ")}).` }));
-    return [...borrowed, ...survs.filter((sv) => partOfSurv(sv) === part).flatMap((sv): DocBlock[] => {
+    return [...partSurvs(part).flatMap((sv): DocBlock[] => {
       const f = list.find((x) => x.key === `surv:${sv.id}`);
       const path = f ? pathOf(f) : `formula:surv.${sv.id}`;
       const sup = `^{(${sv.k})}`, pay = sv.payUnits.length > 0;
@@ -395,8 +415,9 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     }
     return out;
   };
+  basisBlocks.push(...basisFor(partRates(MAIN_PART), sub));
   if (spec.formulas.length) {
-    basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec), ...partBlocks(MAIN_PART, (t) => sub(t)));
+    basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec, partCombo(MAIN_PART)), ...partBlocks(MAIN_PART, (t) => sub(t)));
   }
   out.push({ id: "premium", title: "1. 보험료의 계산에 관한 사항", blocks: basisBlocks });
 
@@ -422,21 +443,23 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
 
   for (const s of opt.extra ?? []) out.push({ ...s, title: s.title.replace(/^\d+\.\s*/, `${no++}. `) });
 
-  // 특약 — 주계약 아래에 특약마다 따로(독립특약). 머리 "[특약 이름] 1. …" 이고 예정기초율·기호는 주계약 것을 쓴다.
-  // 2·3장은 식만(관련 사항 글은 주계약 2·3장과 같다 — 되읽을 때 두 번 들어가지 않게)
+  // 특약 — 주계약 아래에 특약마다 따로, **독립특약**(사용자 요청 2026-10-06): 주계약에서 가져오는 것이 없다.
+  // 머리 "[특약 이름] 1. …" 아래 예정기초율(그 특약의 위험률)·기호의 정의(그 특약의 합성)·유지자(그 특약이 쓰는 lx — 주계약과 같은 것도 다시)·보험금·보장·보험료,
+  // 2·3장도 관련 사항 글과 식을 모두 싣는다(되읽기는 특약 부의 글을 주계약 것과 같다고 보고 한 번만 담는다)
   if (spec.formulas.length) units.slice(1).forEach((u, ui) => {
     let k = 0;
-    const subOf = (text: string): DocBlock => ({ t: "p", kind: "sub", text: `${SUBS[k++] ?? "기타"}. ${text}` });
+    const subOf = (text: string, path?: string): DocBlock => ({ t: "p", kind: "sub", text: `${SUBS[k++] ?? "기타"}. ${text}`, ...(path ? { path } : {}) });
     const pre = `[${u}] `;
     out.push({ id: `rider-${ui + 1}`, title: `${pre}1. 보험료의 계산에 관한 사항`, blocks: [
-      { t: "p", path: "units", text: `${u} — 주계약에 붙는 특약이다. 주계약의 예정기초율·사업비·기호를 그대로 쓰고, 이 특약의 유지자·보험금·보장으로 보험료·책임준비금·해지환급금을 계산한다.` },
-      subOf("예정기초율"), { t: "p", path: "basis", text: "주계약 1. 가. 예정기초율과 같다." },
-      subOf("기호의 정의"), { t: "p", text: "주계약 1. 나. 기호의 정의와 같다." },
+      { t: "p", path: "units", text: `${u} — 독립특약. 이 특약의 예정기초율·유지자·보험금·보장만으로 보험료·책임준비금·해지환급금을 계산한다.` },
+      ...basisFor(partRates(u), subOf),
+      subOf("기호의 정의"), ...symbolBlocks(spec, partCombo(u)),
       ...partBlocks(u, subOf),
     ] });
-    for (const [name, path, n] of [[RESERVE, "reserve", 2], [SURRENDER, "surrender", 3]] as const) {
+    for (const [name, notes, path, n] of [[RESERVE, spec.reserve.notes, "reserve", 2], [SURRENDER, spec.surrender.notes, "surrender", 3]] as const) {
       const list = chapterLists.get(name) ?? [];
-      if (list.length) out.push({ id: `rider-${ui + 1}-${path}`, title: `${pre}${n}. ${name}`, blocks: formulaBlocks(list) });
+      const extra: DocBlock[] = notes.map((t, i) => ({ t: "note" as const, text: t, path: `${path}.notes[${i}]` }));
+      if (list.length || extra.length) out.push({ id: `rider-${ui + 1}-${path}`, title: `${pre}${n}. ${name}`, blocks: [...extra, ...formulaBlocks(list)] });
     }
   });
   const appendix = rateTableBlocks(spec);

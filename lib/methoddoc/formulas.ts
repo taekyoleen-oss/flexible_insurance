@@ -89,10 +89,14 @@ const exitsOf = (spec: MethodSpec, b: BenefitSpec) =>
 const idsKey = (ids: string[]) => [...ids].sort().join(",");
 const MAIN = "주계약";
 
-/** 계약 단위의 납입 사유 — 그 단위 모든 담보에 공통인 탈퇴 사유(보통 사망) + 납입면제 사유 (옛 조건에서 [납입] 생존자를 만들 때) */
+/**
+ * 계약 단위의 납입 사유 — 그 단위 모든 담보에 공통인 탈퇴 사유(보통 사망) + 납입면제 사유 (옛 조건에서 [납입] 생존자를 만들 때).
+ * 납입면제는 **첫 계약 단위(주계약)만** — 특약은 독립특약이라 주계약의 납입면제를 가져오지 않는다(사용자 요청 2026-10-06)
+ */
 function payCauses(spec: MethodSpec, unit: string): RateRef[] {
   const lists = spec.benefits.filter((b) => unitOf(b) === unit).map((b) => exitsOf(spec, b));
   const common = (lists[0] ?? []).filter((r) => lists.every((l) => l.includes(r)));
+  if (unit !== unitNames(spec)[0]) return common;
   return [...common, ...waiverRates(spec).filter((w) => !common.includes(w))];
 }
 
@@ -109,13 +113,14 @@ export function survivorsOf(spec: MethodSpec): { survivors: SurvivorSpec[]; bene
     list.push(s);
     return s;
   };
-  const byExits = (ids: string[]) => list.find((s) => idsKey(s.exitRateIds) === idsKey(ids));
+  // 같은 탈퇴 사유라도 계약 단위가 다르면 다른 유지자 — 특약은 독립특약이라 주계약의 유지자를 함께 쓰지 않는다
+  const byExits = (ids: string[], unit: string) => list.find((s) => idsKey(s.exitRateIds) === idsKey(ids) && (s.unit?.trim() || MAIN) === unit);
   const benefitOf = spec.benefits.map((b) => {
     const named = b.survivorId ? list.find((s) => s.id === b.survivorId) : undefined;
     if (named) return named.id;
     const ids = exitsOf(spec, b).map((r) => r.id);
-    const hit = byExits(ids);
-    if (hit) { if (!spec.survivors?.length && hit.unit !== undefined && hit.unit !== b.unit?.trim()) delete hit.unit; return hit.id; }
+    const hit = byExits(ids, unitOf(b));
+    if (hit) return hit.id;
     return add(ids, unitOf(b)).id;
   });
   const payOf = new Map<string, string>();
@@ -125,7 +130,7 @@ export function survivorsOf(spec: MethodSpec): { survivors: SurvivorSpec[]; bene
     if (marked) { payOf.set(unit, marked.id); continue; }
     // 적힌 [납입] 이 없으면 — 그 단위 담보 공통 탈퇴 사유 + 납입면제 사유의 생존자(같은 사유의 생존자가 있으면 그것)
     const ids = payCauses(spec, unit).map((r) => r.id);
-    const s = byExits(ids) ?? add(ids, unit);
+    const s = byExits(ids, unit) ?? add(ids, unit);
     s.payFor = [...(s.payFor ?? []), unit];
     payOf.set(unit, s.id);
   }
