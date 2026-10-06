@@ -9,8 +9,8 @@ const table = cancerRates as RateTable;
 describe("암보험 (사망 시 책임준비금 지급형)", () => {
   it("위험률표: 암발생률, 사망률 없음, terminal 100 → 40세 가입 60년 만기", () => {
     expect(table.meta.terminal).toEqual({ M: 100, F: 100 });
-    expect(table.M.q[40]).toBeCloseTo(0.00257, 9); expect(table.F.q[40]).toBeCloseTo(0.005574, 9);   // 경험생명표(가상)
-    expect(table.M.q[110]).toBe(table.M.q[109]); expect(table.F.q[111]).toBeCloseTo(0.014376, 9);
+    expect(table.M.q[40]).toBeCloseTo(0.002657, 9); expect(table.F.q[40]).toBeCloseTo(0.005681, 9);   // 경험생명표(가상)
+    expect(table.M.q[110]).toBe(table.M.q[109]); expect(table.F.q[111]).toBeCloseTo(0.0144, 9);
     expect(table.M.f.every((v) => v === 0)).toBe(true);
     const s = reducer(initialState(), { type: "reset", product: "cancer" });
     expect(s.profile.product).toBe("cancer"); expect(termOf(s.profile)).toBe(60); expect(tableOf(s.profile)).toBe(CANCER_TABLE);

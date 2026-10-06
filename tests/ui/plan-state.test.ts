@@ -151,7 +151,7 @@ describe("탈퇴 사유 결합 — 유지자수·납입자수", () => {
     const { coverages, input } = tabPlanInput(w, main(w), r);
     expect(main(w).coverages).toHaveLength(1);
     const q = r.byId[colOf(w, /사망/).id][0], k = r.byId[colOf(w, /80% 이상 장해/).id][0];
-    expect(k).toBeCloseTo(0.000147, 12);                          // 경험생명표(가상) 40세 남 재해 0.000052 + 질병 0.000095
+    expect(k).toBeCloseTo(0.000144, 12);                          // 경험생명표(가상) 40세 남 80% 이상 장해율 = 재해 + 질병(가상 값)
     expect(coverages[0].exit[40]).toBeCloseTo(q + k - q * k / 2, 15);
     expect(coverages[0].event).toEqual([]);                       // 급부 = 탈퇴
     expect(input.waiverRate).toEqual([]);                         // 납입자수 = 유지자수

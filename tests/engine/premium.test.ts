@@ -31,13 +31,13 @@ describe("G1 정기 31세 남 · 90세 만기 · 20년납 월납 · 3.4% · 경�
   const k = commutation({ interest: 0.034, q: kli7.M.q, f: kli7.M.f }, 31, 59);
   const c: Contract = { age: 31, termYears: 59, payYears: 20, freq: 12, S: new Array(59).fill(1), C: new Array(60).fill(0) };
   const p = premium(k, c, term1504);
-  it("10만원당 순 93 · 기준연납 1,102 · 영업 133 · 신계약비 2,102", () => {
-    expect(r0(p.net)).toBe(93);
-    expect(r0(p.base)).toBe(1102);
+  it("10만원당 순 94 · 기준연납 1,109 · 영업 133 · 신계약비 2,109", () => {
+    expect(r0(p.net)).toBe(94);
+    expect(r0(p.base)).toBe(1109);
     expect(r0(p.gross)).toBe(133);
-    expect(r0(p.alpha)).toBe(2102);
+    expect(r0(p.alpha)).toBe(2109);
   });
-  it("β′ 포함 연납순보험료 1,167", () => expect(r0(p.pBeta)).toBe(1167));
+  it("β′ 포함 연납순보험료 1,174", () => expect(r0(p.pBeta)).toBe(1174));
   it("부가보험료 합 = 영업 − 순", () => {
     const L = p.loading; expect(L.alpha + L.betaS + L.betaPrime + L.betaG + L.gamma).toBeCloseTo(p.gross - p.net, 12);
   });

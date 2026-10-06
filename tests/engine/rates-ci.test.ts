@@ -5,7 +5,7 @@ import { RATE_PRESETS } from "@/lib/plan-rates";
 import { riderPremiums } from "@/lib/riders";
 import { initialState, reducer } from "@/lib/state";
 
-describe("rates-ci.json (제공받은 뇌출혈·급성심근경색증 발생률)", () => {
+describe("rates-ci.json (경험생명표(가상) 뇌출혈·급성심근경색증 발생률)", () => {
   it("0세부터 뇌출혈 85개·AMI 80개, 남녀 같은 길이", () => {
     expect(ci.meta.ages).toEqual({ stroke: [0, 84], ami: [0, 79] });
     expect(ci.stroke.M).toHaveLength(85);
@@ -13,13 +13,13 @@ describe("rates-ci.json (제공받은 뇌출혈·급성심근경색증 발생률
     expect(ci.ami.M).toHaveLength(80);
     expect(ci.ami.F).toHaveLength(80);
   });
-  it("원본 엑셀의 값이 그대로 들어 있다", () => {
-    expect(ci.stroke.M[40]).toBe(0.000254);
-    expect(ci.stroke.F[40]).toBe(0.000601);
-    expect(ci.ami.M[40]).toBe(0.000488);
-    expect(ci.ami.F[40]).toBe(0.000122);
-    expect(ci.stroke.M[60]).toBe(0.001137);
-    expect(ci.ami.M[60]).toBe(0.002989);
+  it("가상 값(원본에 연령마다 약 ±5% 를 곱한 것)", () => {
+    expect(ci.stroke.M[40]).toBe(0.0002528);
+    expect(ci.stroke.F[40]).toBe(0.0005892);
+    expect(ci.ami.M[40]).toBe(0.0004994);
+    expect(ci.ami.F[40]).toBe(0.0001209);
+    expect(ci.stroke.M[60]).toBe(0.00111);
+    expect(ci.ami.M[60]).toBe(0.002877);
   });
   it("확률 범위 안이고 20세 이후로는 나이가 들수록 커진다 (AMI 표는 마지막 두 살에서 꺾인다 — 원본 그대로)", () => {
     for (const v of [ci.stroke.M, ci.stroke.F, ci.ami.M, ci.ami.F]) {

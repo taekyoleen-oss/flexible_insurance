@@ -13,16 +13,16 @@ const verify = getAssumption("verify-term-1504");
 describe("compute G1 (verify-term-1504 세트, 1억, 정기 형태)", () => {
   const r = compute({ sex: "M", age: 31, payYears: 20, S0: 1e8, termYears: 59,
     blocks: [{ fromAge: 31, toAge: 89, multiple: 1, kind: "death" }] }, verify, table);
-  it("월 영업보험료 133,000원, 순 93,000원, 총납입 31,920,000원", () => {
+  it("월 영업보험료 133,000원, 순 94,000원, 총납입 31,920,000원", () => {
     expect(r.monthly.gross).toBe(133000);
-    expect(r.monthly.net).toBe(93000);
+    expect(r.monthly.net).toBe(94000);
     expect(r.totalPaid).toBe(31920000);
   });
-  it("해약환급금 10년 13,417,000 · 20년 31,346,000", () => {
-    expect(r.surrender.cash[10]).toBe(13417000);
-    expect(r.surrender.cash[20]).toBe(31346000);
+  it("해약환급금 10년 13,488,000 · 20년 31,545,000", () => {
+    expect(r.surrender.cash[10]).toBe(13488000);
+    expect(r.surrender.cash[20]).toBe(31545000);
   });
-  it("표준 준비금 10만원당 20년 33,086", () => expect(r.reserveStd100k[20]).toBe(33086));
+  it("표준 준비금 10만원당 20년 32,897", () => expect(r.reserveStd100k[20]).toBe(32897));
   it("사업비 흐름: 길이 n, 0년차에 신계약비 포함", () => {
     expect(r.expenseFlow).toHaveLength(59);
     expect(r.expenseFlow[0]).toBeGreaterThan(r.expenseFlow[1]);
@@ -46,7 +46,7 @@ describe("G3 평준 스케줄 = 종신 공식 (사업비 0, 납입면제 OFF)", 
 describe("G4 정기 형태 = 정기 공식", () => {
   const a = { ...verify, expenses: { model: "simple" as const, alpha: 0, beta: 0, gamma: 0 } };
   const r = compute({ sex: "M", age: 31, payYears: 20, S0: 1e8, termYears: 59, blocks: [{ fromAge: 31, toAge: 89, multiple: 1, kind: "death" }] }, a, table);
-  it("순보험료 = M*/N*", () => expect(r.perUnit.net).toBeCloseTo(16212.828499 / 17378602.403207, 12));
+  it("순보험료 = M*/N*", () => expect(r.perUnit.net).toBeCloseTo(16313.003000811903 / 17377818.932583548, 12));
 });
 
 describe("저해지 70% (해지율 3%): 해지급부 현가로 보험료를 다시 산출한다", () => {
