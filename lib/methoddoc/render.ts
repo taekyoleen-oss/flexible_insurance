@@ -19,7 +19,8 @@ export type DocBlock =
   | { t: "formula"; text: string; path?: string }
   | { t: "note"; text: string; path?: string }
   | { t: "table"; head: string[]; rows: (string | number)[][]; rowPaths?: (string | undefined)[] };
-export interface DocSection { id: string; title: string; blocks: DocBlock[] }
+/** part — 계약 단위의 부(주계약 · 특약 이름). 계약 단위가 둘 이상일 때만 단다 — 조건에서 고른 탭의 부만 비추려고 */
+export interface DocSection { id: string; title: string; blocks: DocBlock[]; part?: string }
 
 const pctOf = (x?: number, d = 3) => (x === undefined ? "—" : `${(x * 100).toFixed(d)}%`);
 const wonOf = (x?: number) => (x === undefined ? "—" : `${Math.round(x).toLocaleString("ko-KR")}원`);
@@ -419,7 +420,8 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   if (spec.formulas.length) {
     basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec, partCombo(MAIN_PART)), ...partBlocks(MAIN_PART, (t) => sub(t)));
   }
-  out.push({ id: "premium", title: "1. 보험료의 계산에 관한 사항", blocks: basisBlocks });
+  const mainPart = multiPart ? { part: MAIN_PART } : {};
+  out.push({ id: "premium", title: "1. 보험료의 계산에 관한 사항", blocks: basisBlocks, ...mainPart });
 
   // 2·3. 책임준비금·해지환급금 — 식과 관련 사항을 한 장에
   let no = 2;
@@ -429,7 +431,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     // 해약공제 기간은 해약공제 식(min(m, N))과 그 설명 줄이 말한다 — 따로 문장을 두지 않는다
     const extra: DocBlock[] = notes.map((t, i) => ({ t: "note" as const, text: t, path: `${path}.notes[${i}]` }));
     // 관련 사항(글)을 먼저, 식을 나중에 — 실무 문서의 차례이고, 되읽을 때도 글이 식의 ※ 덧붙임으로 붙지 않는다
-    if (list.length || extra.length) out.push({ id: path, title: `${no++}. ${name}`, blocks: [...extra, ...formulaBlocks(list)] });
+    if (list.length || extra.length) out.push({ id: path, title: `${no++}. ${name}`, blocks: [...extra, ...formulaBlocks(list)], ...mainPart });
   }
   // 사용자가 새로 만든 절(조건의 formulas 에 새 절 이름을 적은 것)
   for (const [name, list] of bySection) out.push({ id: `formula-${no}`, title: `${no++}. ${name}`, blocks: formulaBlocks(list) });
@@ -450,8 +452,8 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     let k = 0;
     const subOf = (text: string, path?: string): DocBlock => ({ t: "p", kind: "sub", text: `${SUBS[k++] ?? "기타"}. ${text}`, ...(path ? { path } : {}) });
     const pre = `[${u}] `;
-    out.push({ id: `rider-${ui + 1}`, title: `${pre}1. 보험료의 계산에 관한 사항`, blocks: [
-      { t: "p", path: "units", text: `${u} — 독립특약. 이 특약의 예정기초율·유지자·보험금·보장만으로 보험료·책임준비금·해지환급금을 계산한다.` },
+    out.push({ id: `rider-${ui + 1}`, part: u, title: `${pre}1. 보험료의 계산에 관한 사항`, blocks: [
+      { t: "p", path: "units", text: `${u} — 독립특약. 이 특약의 예정기초율·유지자·보험금·보장만으로 보험료·책임준비금·해지환급금을 계산한다. 주계약의 보험료 납입이 면제되면 약관에 따라 이 특약도 면제되지만, 관례대로 보험료에는 납입면제를 반영하지 않는다(반영하면 보험료가 높아진다).` },
       ...basisFor(partRates(u), subOf),
       subOf("기호의 정의"), ...symbolBlocks(spec, partCombo(u)),
       ...partBlocks(u, subOf),
@@ -459,7 +461,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     for (const [name, notes, path, n] of [[RESERVE, spec.reserve.notes, "reserve", 2], [SURRENDER, spec.surrender.notes, "surrender", 3]] as const) {
       const list = chapterLists.get(name) ?? [];
       const extra: DocBlock[] = notes.map((t, i) => ({ t: "note" as const, text: t, path: `${path}.notes[${i}]` }));
-      if (list.length || extra.length) out.push({ id: `rider-${ui + 1}-${path}`, title: `${pre}${n}. ${name}`, blocks: [...extra, ...formulaBlocks(list)] });
+      if (list.length || extra.length) out.push({ id: `rider-${ui + 1}-${path}`, part: u, title: `${pre}${n}. ${name}`, blocks: [...extra, ...formulaBlocks(list)] });
     }
   });
   const appendix = rateTableBlocks(spec);
