@@ -41,11 +41,31 @@ function numbered(base: string, n: number): string[] {
   return n === 1 ? [base] : Array.from({ length: n }, (_, i) => `${base}^{(${i + 1})}`);
 }
 
+/** 기호로 쓸 수 없는 이름 — 식의 계열·기호(l · d · D · N · C · M · S · V · W · Q · R …)와 함수 이름 */
+const RESERVED_SYM = new Set(["l", "d", "D", "N", "C", "M", "S", "V", "W", "Q", "R", "F", "P", "G", "E", "H", "k", "n", "m", "t", "u", "x", "v", "i", "w", "f", "g", "e", "min", "max", "if", "round"]);
+
 /**
- * 위험률 기호 — 문서 전체에서 한 위험률은 한 기호다(생존자 표·보험금 표가 같은 기호를 쓴다).
- * 사망 q(둘 이상이면 q^{(1)} …), 그 밖의 위험률 r(둘 이상이면 r^{(1)} …) — 조건의 위험률 차례대로. 해지율은 w 로 따로.
+ * 위험률 기호 — 문서 전체에서 한 위험률은 한 기호다(유지자 표·보험금 표가 같은 기호를 쓴다).
+ * **M04 예정위험률 표의 기호(위험률 id)를 그대로 쓴다**(사용자 요청 2026-10-06 — 암발생률 rc 가 식에서 r^{(1)} 로 바뀌지 않게).
+ * id 가 기호로 쓸 수 없는 글자(영문자로 시작하는 영문·숫자가 아니거나 식의 계열 이름과 겹침)일 때만 옛 방식 —
+ * 사망 q, 그 밖 r 에 차례 위첨자(q^{(1)} · r^{(1)} …). 해지율은 w 로 따로.
  */
 export function rateSymbols(spec: MethodSpec): Map<string, string> {
+  const rs = spec.rates.filter((r) => r.role !== "lapse");
+  const out = new Map<string, string>();
+  for (const r of rs) if (/^[A-Za-z][A-Za-z0-9]*$/.test(r.id) && !RESERVED_SYM.has(r.id) && ![...out.values()].includes(r.id)) out.set(r.id, r.id);
+  // 나머지는 옛 방식 — 그 밑글자가 하나뿐이면 q · r, 여럿이면 차례 위첨자(옛 판과 같은 모양 — 자유설계보험의 id 는 기호로 못 쓴다)
+  const rest = rs.filter((r) => !out.has(r.id)), taken = new Set(out.values());
+  for (const base of ["q", "r"] as const) {
+    const list = rest.filter((r) => (r.role === "death") === (base === "q"));
+    const names = list.length === 1 && !taken.has(base) ? [base] : list.map((_, i) => `${base}^{(${i + 1})}`);
+    list.forEach((r, i) => out.set(r.id, names[i]));
+  }
+  return out;
+}
+
+/** 옛 판(2026-10-05 까지)의 위험률 기호 — 사망 q · 그 밖 r(둘 이상이면 ^{(i)}), 위험률 표의 차례. 옛 문서를 되읽을 때만 쓴다 */
+export function legacyRateSymbols(spec: MethodSpec): Map<string, string> {
   const rs = spec.rates.filter((r) => r.role !== "lapse");
   const deaths = rs.filter((r) => r.role === "death"), others = rs.filter((r) => r.role !== "death");
   const dq = numbered("q", deaths.length), dr = numbered("r", others.length);

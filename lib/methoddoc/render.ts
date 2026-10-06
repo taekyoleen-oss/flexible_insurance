@@ -202,7 +202,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
       ...(spec.meta.kind ? [[["종류", spec.meta.kind], "meta.kind"] as [string[], string]] : []),
       ...(date ? [[["작성일", date], "meta.date"] as [string[], string]] : []),
       ...(spec.meta.version ? [[["판", spec.meta.version], "meta.version"] as [string[], string]] : []),
-      [["계약 단위", spec.units.length ? spec.units.map((u) => u.name).join(" · ") : "주계약"], "units"],
+      [["계약 단위", spec.units.length ? spec.units.map((u) => u.name).join(" · ") : unitNames(spec).join(" · ") || "주계약"], "units"],
       ...(spec.meta.note ? [[["비고", spec.meta.note], "meta.note"] as [string[], string]] : []),
     ]),
     ...(hasProduct(spec.product) ? productBlocks(spec.product, hasContract(spec.contract)) : []),
@@ -275,6 +275,7 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   const units = unitNames(spec);
   const rank = (i: number) => units.indexOf(unitOf(spec.benefits[i])) * 1e4 + i;
   const bens: BenefitModel[] = spec.benefits.length && survs.length ? benefitModels(spec).sort((a, b) => rank(a.idx) - rank(b.idx)) : [];
+  const allBens = bens;
   // 식은 절(section)별로 묶는다 — 1장의 소제목들, 준비금·환급금은 2·3장
   const bySection = new Map<string, typeof spec.formulas>();
   for (const f of spec.formulas) {
@@ -296,11 +297,20 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   const take = (name: string) => { const l = bySection.get(name); bySection.delete(name); return l ?? []; };
   /** 그 절의 식 가운데 표가 대신하는 자동 식을 뺀 것 — 사람이 더한 식(key 없음)과 그 밖의 식. 고친 자동 식은 그 표 아래에 싣는다 */
   const extraOf = (list: typeof spec.formulas, own: (key: string) => boolean) => list.filter((f) => !f.key || !own(f.key));
+  // 부(部) — 주계약과 특약마다 산출방법서를 따로 싣는다(사용자 요청 2026-10-06). 유지자는 그 lx 를 처음 쓰는 계약 단위의 부에
+  const MAIN_PART = units[0] ?? "주계약";
+  const partOfSurv = (sv: (typeof survs)[number]) =>
+    units.find((u) => sv.payUnits.includes(u) || sv.benefitIdx.some((i) => unitOf(spec.benefits[i]) === u)) ?? (sv.unit?.trim() || MAIN_PART);
+  const keepList = take(KEEP_SUB), benList = take(BENEFIT_SUB);
 
-  const keepBlocks = (): DocBlock[] => {
-    const list = take(KEEP_SUB);
+  const keepBlocks = (part: string): DocBlock[] => {
+    const list = keepList;
     const multiUnit = units.length > 1;
-    return [...survs.flatMap((sv): DocBlock[] => {
+    // 다른 부(주계약)의 유지자를 가져다 쓰면 그것을 밝힌다 — "(k) l^{(k)}_x — 이름" 꼴은 되읽기가 유지자 이름으로 읽으므로 쓰지 않는다
+    const borrowed: DocBlock[] = survs.filter((sv) => partOfSurv(sv) !== part && (sv.payUnits.includes(part) || sv.benefitIdx.some((i) => unitOf(spec.benefits[i]) === part)))
+      .map((sv) => ({ t: "p", path: `formula:surv.${sv.id}`, text: `lx(${sv.k}) ${sv.label} — ${partOfSurv(sv)} 다. 유지자의 것을 쓴다(${[
+        sv.benefitIdx.some((i) => unitOf(spec.benefits[i]) === part) ? "대상자수" : "", sv.payUnits.includes(part) ? "납입 D′ · N′" : ""].filter(Boolean).join(" · ")}).` }));
+    return [...borrowed, ...survs.filter((sv) => partOfSurv(sv) === part).flatMap((sv): DocBlock[] => {
       const f = list.find((x) => x.key === `surv:${sv.id}`);
       const path = f ? pathOf(f) : `formula:surv.${sv.id}`;
       const sup = `^{(${sv.k})}`, pay = sv.payUnits.length > 0;
@@ -317,15 +327,15 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
         table(["구분", "식"], rows),
         ...(f?.edited ? formulaBlocks([f]) : []),
       ];
-    }), ...formulaBlocks(extraOf(list, (k) => k.startsWith("surv:")))];
+    }), ...(part === MAIN_PART ? formulaBlocks(extraOf(list, (k) => k.startsWith("surv:"))) : [])];
   };
 
-  const benefitBlocks = (): DocBlock[] => {
-    const list = take(BENEFIT_SUB);
+  const benefitBlocks = (part: string): DocBlock[] => {
+    const list = benList;
     return [
       // 해지율이 있으면 해지자의 현가(H) — 보험금 쪽 계산기수
       ...formulaBlocks(list.filter((f) => f.key === "pv:H")),
-      ...bens.flatMap((m, n): DocBlock[] => {
+      ...bens.filter((m) => unitOf(m.b) === part).flatMap((m, n): DocBlock[] => {
         const b = m.b, i = m.idx, f = list.find((x) => x.key === `benefit:${b.id}`);
         const fk = `formula:benefit.${b.id}`;
         const at = (...k: string[]) => [...k.map((x) => `benefits[${i}].${x}`), fk].join("|");
@@ -344,12 +354,13 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
           ...(f?.edited ? formulaBlocks([f]) : []),
         ];
       }),
-      ...formulaBlocks(extraOf(list, (k) => k === "pv:H" || k.startsWith("benefit:"))),
+      ...(part === MAIN_PART ? formulaBlocks(extraOf(list, (k) => k === "pv:H" || k.startsWith("benefit:"))) : []),
     ];
   };
 
   /** 마. 보장 — 보장마다 한 행(배수 · 면책 · 삭감). 보험기간은 가입 조건이 정하므로 그것과 다를 때만 열을 더한다 */
-  const coverBlocks = (): DocBlock[] => {
+  const coverBlocks = (part: string): DocBlock[] => {
+    const bens = allBens.filter((m) => unitOf(m.b) === part);
     if (!bens.length) return [];
     const termAge = (u: string) => {
       const ages = [...new Set((spec.product?.terms ?? []).filter((r) => (r.label?.trim() && !/^주계약/.test(r.label.trim()) ? r.label.trim() : "주계약") === u)
@@ -374,19 +385,26 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
     ];
   };
 
-  if (spec.formulas.length) {
-    basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec));
-    for (const [name, blocks] of [[KEEP_SUB, keepBlocks()], [BENEFIT_SUB, benefitBlocks()], [COVER_SUB, coverBlocks()],
-      [PREMIUM_SUB, formulaBlocks(take(PREMIUM_SUB).filter((f) => !CALC_ONLY.has(f.key ?? "") || f.edited))]] as const) {
-      if (blocks.length) basisBlocks.push(sub(name), ...blocks);
+  const premBlocks = () => formulaBlocks(premList.filter((f) => !CALC_ONLY.has(f.key ?? "") || f.edited));
+  const premList = take(PREMIUM_SUB);
+  /** 다. 유지자 · 라. 보험금 · 마. 보장 · 바. 순보험료 및 영업보험료 — 그 부(계약 단위)의 것만 */
+  const partBlocks = (part: string, subOf: (text: string) => DocBlock): DocBlock[] => {
+    const out: DocBlock[] = [];
+    for (const [name, blocks] of [[KEEP_SUB, keepBlocks(part)], [BENEFIT_SUB, benefitBlocks(part)], [COVER_SUB, coverBlocks(part)], [PREMIUM_SUB, premBlocks()]] as const) {
+      if (blocks.length) out.push(subOf(name), ...blocks);
     }
+    return out;
+  };
+  if (spec.formulas.length) {
+    basisBlocks.push(sub("기호의 정의"), ...symbolBlocks(spec), ...partBlocks(MAIN_PART, (t) => sub(t)));
   }
   out.push({ id: "premium", title: "1. 보험료의 계산에 관한 사항", blocks: basisBlocks });
 
   // 2·3. 책임준비금·해지환급금 — 식과 관련 사항을 한 장에
   let no = 2;
+  const chapterLists = new Map([RESERVE, SURRENDER].map((name) => [name, take(name) ?? []]));
   for (const [name, notes, path] of [[RESERVE, spec.reserve.notes, "reserve"], [SURRENDER, spec.surrender.notes, "surrender"]] as const) {
-    const list = take(name) ?? [];
+    const list = chapterLists.get(name) ?? [];
     // 해약공제 기간은 해약공제 식(min(m, N))과 그 설명 줄이 말한다 — 따로 문장을 두지 않는다
     const extra: DocBlock[] = notes.map((t, i) => ({ t: "note" as const, text: t, path: `${path}.notes[${i}]` }));
     // 관련 사항(글)을 먼저, 식을 나중에 — 실무 문서의 차례이고, 되읽을 때도 글이 식의 ※ 덧붙임으로 붙지 않는다
@@ -403,6 +421,24 @@ export function renderMethodDoc(spec: MethodSpec, opt: RenderOptions = {}): DocS
   });
 
   for (const s of opt.extra ?? []) out.push({ ...s, title: s.title.replace(/^\d+\.\s*/, `${no++}. `) });
+
+  // 특약 — 주계약 아래에 특약마다 따로(독립특약). 머리 "[특약 이름] 1. …" 이고 예정기초율·기호는 주계약 것을 쓴다.
+  // 2·3장은 식만(관련 사항 글은 주계약 2·3장과 같다 — 되읽을 때 두 번 들어가지 않게)
+  if (spec.formulas.length) units.slice(1).forEach((u, ui) => {
+    let k = 0;
+    const subOf = (text: string): DocBlock => ({ t: "p", kind: "sub", text: `${SUBS[k++] ?? "기타"}. ${text}` });
+    const pre = `[${u}] `;
+    out.push({ id: `rider-${ui + 1}`, title: `${pre}1. 보험료의 계산에 관한 사항`, blocks: [
+      { t: "p", path: "units", text: `${u} — 주계약에 붙는 특약이다. 주계약의 예정기초율·사업비·기호를 그대로 쓰고, 이 특약의 유지자·보험금·보장으로 보험료·책임준비금·해지환급금을 계산한다.` },
+      subOf("예정기초율"), { t: "p", path: "basis", text: "주계약 1. 가. 예정기초율과 같다." },
+      subOf("기호의 정의"), { t: "p", text: "주계약 1. 나. 기호의 정의와 같다." },
+      ...partBlocks(u, subOf),
+    ] });
+    for (const [name, path, n] of [[RESERVE, "reserve", 2], [SURRENDER, "surrender", 3]] as const) {
+      const list = chapterLists.get(name) ?? [];
+      if (list.length) out.push({ id: `rider-${ui + 1}-${path}`, title: `${pre}${n}. ${name}`, blocks: formulaBlocks(list) });
+    }
+  });
   const appendix = rateTableBlocks(spec);
   if (appendix.length) out.push({ id: "rate-tables", title: `${no++}. 별첨 — 위험률 표`, blocks: appendix });
   return out;

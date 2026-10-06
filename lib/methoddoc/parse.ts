@@ -1,5 +1,5 @@
 import type { DocTable, ExtractedDoc } from "./extract";
-import { comboLabel, compactCombos, compactSurvivors, crowdLabel, eventRate, generateFormulas, isAutoKeepLabel, keepLabel, rateSymbols, syncFromSurvivors } from "./formulas";
+import { comboLabel, compactCombos, compactSurvivors, crowdLabel, eventRate, generateFormulas, isAutoKeepLabel, keepLabel, legacyRateSymbols, rateSymbols, syncFromSurvivors } from "./formulas";
 import { FORMULA_MARK, NOTE_MARK } from "./render";
 import { coverFields, emptySpec, hasProduct, RATE_ROLE_LABEL, validateSpec, type BenefitSpec, type Confidence, type EntryRow, type Evidence, type ExpenseItem, type ExtraSection, type FormulaSpec, type MethodSpec, type ParseResult, type ProductInfo, type RateRef, type RateRole, type SurvivorSpec } from "./spec";
 
@@ -381,14 +381,22 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
     if (k === "현가누계") { keepTabs.push(seg); seg = []; }
     else if (seg.some(([x]) => x === "대상자수") && (k === "현가및누계" || (k === "계산기수" && seg.filter(([x]) => x === "계산기수").length === 2))) { benTabs.push(seg); seg = []; }
   }
-  const coverTab = doc.tables.find((t) => key(t.head[0] ?? "") === "구분" && t.head.some((h) => key(h) === "보장금액배수"));
+  // 보장 표 — 주계약 · 특약의 부마다 하나씩 있다(특약을 따로 싣는 판). 보험금 표와 같은 차례로 잇는다
+  const coverTabs = doc.tables.filter((t) => key(t.head[0] ?? "") === "구분" && t.head.some((h) => key(h) === "보장금액배수"));
   if (!keepTabs.length && !benTabs.length) return false;
-  // 기호 → 위험률 (문서 전체에서 한 위험률은 한 기호 — rateSymbols 와 같은 차례)
-  const bySym = new Map([...rateSymbols(spec)].map(([id, sym]) => [sym.replace(/[{}\s]/g, ""), id]));
-  /** 식 칸의 기호들 — 첨자 순서·중괄호·빈칸을 고르게 한 뒤 "r_x+t^(1)" 꼴로 찾는다 */
-  const symsIn = (text: string) => [...normFormula(text).matchAll(/([qrQR])_x\+t(?:\^\((\d+)\))?/g)].map((m) => ({ letter: m[1], n: m[2] }));
-  // 첨자 없는 q · r 은 그 글자의 첫 위험률 — 문서에 위험률을 더하면 기호가 r → r^{(1)} · r^{(2)} 로 바뀌는데, 앞서 적힌 칸은 r 그대로다
-  const rateOfSym = (x: { letter: string; n?: string }) => (x.letter === "q" || x.letter === "r" ? bySym.get(x.n ? `${x.letter}^(${x.n})` : x.letter) ?? (x.n ? undefined : bySym.get(`${x.letter}^(1)`)) : undefined);
+  // 기호 → 위험률 — 지금 기호(M04 표의 기호 = 위험률 id) 먼저, 없으면 옛 판 기호(사망 q · 그 밖 r^{(i)} — 위험률 표의 차례)
+  const symMap = (m: Map<string, string>) => new Map([...m].map(([id, sym]) => [sym.replace(/[{}\s]/g, ""), id]));
+  const bySym = symMap(rateSymbols(spec)), byOld = symMap(legacyRateSymbols(spec));
+  /** 식 칸의 기호들 — 첨자 순서·중괄호·빈칸을 고르게 한 뒤 "rc_x+t" · "r_x+t^(1)" 꼴로 찾는다 */
+  const symsIn = (text: string) => [...normFormula(text).matchAll(/(?<![A-Za-z0-9])([A-Za-z][A-Za-z0-9]*)_x\+t(?:\^\((\d+)\))?/g)].map((m) => ({ letter: m[1], n: m[2] }));
+  // 첨자 없는 옛 q · r 은 그 글자의 첫 위험률 — 문서에 위험률을 더하면 기호가 r → r^{(1)} · r^{(2)} 로 바뀌는데, 앞서 적힌 칸은 r 그대로다
+  const rateOfSym = (x: { letter: string; n?: string }) => {
+    if (x.letter === "Q" || x.letter === "R") return undefined;
+    const k = x.n ? `${x.letter}^(${x.n})` : x.letter;
+    return bySym.get(k) ?? byOld.get(k) ?? (x.n ? undefined : byOld.get(`${x.letter}^(1)`));
+  };
+  /** 위험률 기호로 보이는데 위험률을 못 찾은 것 — 식의 계열(l · d · D · N · C …)은 아니다 */
+  const STRUCT = /^(l|d|D|N|C|M|S|V|W|F|H|E|P|G|v)$/;
   // 위험률 합성 — "Q^(j)" → 위험률 id 들(안의 R 은 펼친다)과 이름
   const combos = new Map<string, { j: number; ids: string[]; name?: string }>();
   const symKey = (x: { letter: string; n?: string }) => `${x.letter}^(${x.n ?? ""})`;
@@ -416,7 +424,7 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
     const k = kOf(cells(t, "계산기수").join(" "), /l_x\+t\+1\^\((\d+)\)/) ?? i + 1;
     const rateText = [...cells(t, "질병발생률"), ...cells(t, "대상위험률")].join(" ");
     const exits = /^없음$/.test(cells(t, "대상위험률")[0] ?? "") ? [] : idsOf(rateText);   // 위험률 표의 차례로 — 합성 기호는 그 위험률들로
-    const lost = symsIn(rateText).filter((x) => (x.letter === "q" || x.letter === "r") && !rateOfSym(x));
+    const lost = symsIn(rateText).filter((x) => x.letter !== "Q" && x.letter !== "R" && !STRUCT.test(x.letter) && !rateOfSym(x));
     if (lost.length) warnings.push(`유지자 lx(${k}) 의 기호 ${[...new Set(lost.map((x) => (x.n ? `${x.letter}^{(${x.n})}` : x.letter)))].join(" · ")} 에 맞는 위험률이 가.(2) 예정위험률 표에 없습니다 — 위험률 행을 지웠다면 유지자 표의 대상 위험률도 고치세요`);
     const pv = cells(t, "현가누계").join(" "), pay = /D[′'’]/.test(pv);
     const payList = /납입\s*:\s*(.+)$/.exec(pv)?.[1].split(/\s*·\s*/).map((x) => x.trim()).filter(Boolean);
@@ -430,15 +438,13 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
       ...(payList ? { payFor: payList } : {}), ...(pay && !payList ? { payAll: true } : {}) });
     evidence.push({ path: `survivors[${survivors.length - 1}]`, label: "유지자", value: `lx(${k})`, raw: t.map((r) => r.join(" ")).join(" | ").slice(0, 160), source: "유지자 표", confidence: "high" });
   });
-  // 보장 표 — 보험금 표와 같은 차례
-  const ch = coverTab ? coverTab.head.map(key) : [];
-  const col = (k: string) => ch.findIndex((h) => h.startsWith(k));
+  // 보장 표 — 보험금 표와 같은 차례(표마다 열이 다를 수 있다 — 특약 부에는 계약 단위 열)
+  const coverRows = coverTabs.flatMap((t) => t.rows.filter((r) => (r[0] ?? "").trim()).map((r) => ({ r, h: t.head.map(key) })));
   const days = (s: string) => { const d = /(\d+)\s*일/.exec(s), y = /(\d+)\s*년/.exec(s); return d ? Number(d[1]) : y ? Number(y[1]) * 365 : undefined; };
-  const coverRows = coverTab?.rows.filter((r) => (r[0] ?? "").trim()) ?? [];
   const n = Math.max(benTabs.length, coverRows.length);
   for (let i = 0; i < n; i++) {
-    const t = benTabs[i], row = coverRows[i];
-    const get = (k: string) => (row && col(k) >= 0 ? (row[col(k)] ?? "").trim() : "");
+    const t = benTabs[i], cr = coverRows[i], row = cr?.r;
+    const get = (k: string) => { const c = cr ? cr.h.findIndex((h) => h.startsWith(k)) : -1; return row && c >= 0 ? (row[c] ?? "").trim() : ""; };
     const name = (row?.[0] ?? "").trim() || `보험금 ${i + 1}`;
     const unit = get("계약단위") || (t ? cells(t, "계약단위")[0] : "") || "";
     const k = t ? kOf(cells(t, "대상자수").join(" "), /l_x\+t\^\((\d+)\)/) : undefined;
@@ -568,14 +574,19 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   const extras: ExtraSection[] = [], reserve: string[] = [], surrender: string[] = [];
   let kind: Kind = "known", title = "", extra: ExtraSection | null = null;
   let cur: Read | null = null;
+  /** 특약 부 안인지 — 그 부의 글은 주계약 부와 같은 것을 가리키므로 관련 사항·원문 절로 넣지 않는다 */
+  let rider = false;
   const autoLabels = new Set(generateFormulas(spec).map((f) => f.label));
   const flush = () => { if (cur?.lines.length) read.push(cur); cur = null; };
   for (const raw of paragraphs) {
-    const t = raw.trim();
-    if (!t || /^```/.test(t)) continue;
+    const t0 = raw.trim();
+    if (!t0 || /^```/.test(t0)) continue;
+    const riderHead = /^\[([^\]]+)\]\s*(\d+\.\s*\S.*)$/.exec(t0);
+    const t = riderHead ? riderHead[2] : t0;
     const top = !/^\d+\.\d/.test(t) && t.length < 60 ? TOP.exec(t) : null;
     if (top) {
       flush();
+      rider = !!riderHead;
       title = top[1].trim();
       kind = /^(기초율에 관한 사항|계약 단위와 급부|기호의 정의|보험료의 계산에 관한 사항)$|^별첨/.test(title) ? "known"
         : /^책임준비금.*사항$/.test(title) ? "reserve" : /^해지환급금.*사항$/.test(title) ? "surrender" : "other";
@@ -614,6 +625,7 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
       flush();                                   // 설명 다음 글은 식이 아니다
     }
     const body = note ?? t;
+    if (rider) continue;
     if (kind === "reserve") reserve.push(body);
     else if (kind === "surrender") {
       const dy = /해약공제는\s*납입기간과\s*(\d+)\s*년\s*중/.exec(body);
