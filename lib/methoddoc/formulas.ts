@@ -1,5 +1,5 @@
 import { coverTerms, unitNames, unitOf, waiverRates, WHOLE_LIFE_AGE, type BenefitSpec, type ComboSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
-import { savingsFormulas } from "./savings";
+import { SAVE_PREMIUM, savingsFormulas } from "./savings";
 
 /**
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
@@ -472,8 +472,10 @@ export function pvbLines(spec: MethodSpec, models: BenefitModel[]): string[] {
   const at = (mo: number) => (!mo ? "M_x" : `M_{x+${mo % 3 === 0 ? String(mo / 12) : `${mo}/12`}}`);
   const special: string[] = [];
   const terms = models.map((m) => {
-    const b = m.b, k = b.multiple !== undefined ? `${b.multiple}·` : "";     // 정액(일당 등)은 배수 없이
-    const tail = !b.endAge || b.endAge >= WHOLE_LIFE_AGE ? "" : " − M_{x+n}";
+    // 정액(일당 등)은 배수 없이. 적립형은 보장금액 1원당(배수는 위험보험료 식 P^{위험} = 배수 × P 에서 곱한다)
+    const b = m.b, k = b.multiple !== undefined && !spec.savings ? `${b.multiple}·` : "";
+    // 적립형은 보험기간(n — 5·10·15년)이 곧 보장기간이다(만기 나이가 아니다)
+    const tail = !spec.savings && (!b.endAge || b.endAge >= WHOLE_LIFE_AGE) ? "" : " − M_{x+n}";
     const own = spec.formulas.find((f) => f.key === `benefit:${b.id}` && f.edited);
     const s = sLine(own?.text);
     if (b.steps?.length || b.points?.length || (s && s !== sLine(m.lines.join("\n")))) {
@@ -489,7 +491,7 @@ export function pvbLines(spec: MethodSpec, models: BenefitModel[]): string[] {
 
 /** 보장금액 표기 — "가입금액의 0.5배" · "50,000,000원" */
 export const amountLabel = (b: BenefitSpec) =>
-  b.multiple !== undefined ? `가입금액의 ${b.multiple}배` : b.amount !== undefined ? `${Math.round(b.amount).toLocaleString("ko-KR")}원${b.role === "recurring" ? "/일" : ""}` : "—";
+  b.multiple !== undefined ? `${b.base === "premium" ? "보험료" : "가입금액"}의 ${b.multiple}배` : b.amount !== undefined ? `${Math.round(b.amount).toLocaleString("ko-KR")}원${b.role === "recurring" ? "/일" : ""}` : "—";
 
 // ── 공통 — 현가와 보험료 ─────────────────────────────────────────────────────
 /** 담보마다 똑같은 식: 현가(D′ · N′ · N* — 보험료 쪽 / D · N — 보험금 쪽)와 보험료(P · G · 반올림) */
@@ -517,15 +519,10 @@ export function commonModels(spec: MethodSpec): { key: string; section: string; 
 }
 
 /** 담보 칸 — 보험금의 현가 식과 산출방법서 담보 표가 이 칸들에 기댄다 */
-export const BENEFIT_FIELDS = ["name", "unit", "role", "endAge", "multiple", "amount", "waitDays", "waitPayRatio", "reduceDays", "reduceRatio", "survivorId", "exitRateIds", "rateId"] as const;
+export const BENEFIT_FIELDS = ["name", "unit", "role", "endAge", "multiple", "base", "amount", "waitDays", "waitPayRatio", "reduceDays", "reduceRatio", "survivorId", "exitRateIds", "rateId"] as const;
 
 // ── 산출방법서에 실을 식 ─────────────────────────────────────────────────────
 export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
-  // 적립형(공시이율형 저축보험) — 유지자·보험금·보험료 대신 보험료의 구성 · 계약자적립액 · 환급금 식
-  if (spec.savings) {
-    const death = spec.rates.find((r) => r.role === "death");
-    return savingsFormulas(spec, (death && rateSymbols(spec).get(death.id)) || "q");
-  }
   const out: FormulaSpec[] = [];
   const lapse = (spec.basis.lapse ?? []).some((l) => l.rate > 0);
   const low = lapse && spec.basis.lowRatio !== undefined;
@@ -562,6 +559,13 @@ export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
       text: [...m.legend, ...(m.legend.length ? [""] : []), ...m.lines].join("\n"),
       ...(m.note ? { note: m.note } : {}),
     });
+  }
+  // 적립형(공시이율형 저축보험) — 유지자·보험금은 그대로, 보험료는 정해져 있으므로 N* · P(보장부분 순보험료)까지만 내고
+  // 보험료의 구성(위험보험료 · 사업비 · 적립보험료) · 계약자적립액 · 환급금 식을 더한다(savings.ts)
+  if (spec.savings) {
+    common.filter((c) => c.key === "pv:NStar" || c.key === "premium:P").forEach((c) => put({ ...c, section: SAVE_PREMIUM }));
+    out.push(...savingsFormulas(spec));
+    return out;
   }
   common.filter((c) => c.key === "pv:NStar").forEach(put);
   common.filter((c) => c.key.startsWith("premium:")).forEach(put);

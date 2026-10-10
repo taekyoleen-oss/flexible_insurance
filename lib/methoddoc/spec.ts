@@ -69,6 +69,11 @@ export interface BenefitSpec {
    * 맨 뒤에 가입금액 × 배수를 한꺼번에 곱한다. 계산하는 계약의 가입금액(CalcContract.sumAssured)이 곱해진다
    */
   multiple?: number;
+  /**
+   * 보장금액의 기준(사용자 요청 2026-10-10) — 없으면 **정액**(보험가입금액 × 배수). "premium" 이면 **보험료의 배수**:
+   * 적립형은 월 기본보험료 × 배수, 보장성은 그 계약 단위 정액 보장들의 1회 보험료 합 × 배수(그 보장 자신의 보험료는 넣지 않는다)
+   */
+  base?: "premium";
   /** 보장금액(원). 배수(multiple)가 없을 때만 — 옛 문서·다른 앱의 절대 금액. 일당형은 1일당 */
   amount?: number;
   /** 보험기간(보장 종료 연령 — 100세 · 종신 110세) */
@@ -236,8 +241,9 @@ export interface ProductInfo {
   renewal?: string;
 }
 
-/** 담보의 보장금액(원) — 배수가 있으면 가입금액 × 배수, 없으면 적힌 금액 */
-export const benefitAmount = (b: BenefitSpec, sumAssured: number) => (b.multiple !== undefined ? b.multiple * sumAssured : b.amount ?? 0);
+/** 담보의 보장금액(원) — 배수가 있으면 기준금액 × 배수(정액은 가입금액, 보험료의 배수는 premium — 적립형 기본보험료 · 보장성 정액 보장의 1회 보험료 합), 없으면 적힌 금액 */
+export const benefitAmount = (b: BenefitSpec, sumAssured: number, premium = 0) =>
+  (b.multiple !== undefined ? b.multiple * (b.base === "premium" ? premium : sumAssured) : b.amount ?? 0);
 
 /** 이 나이 이상의 보험기간은 종신 — 사망률 표의 마지막 나이(그 해 사망률 1)까지 보장한다 */
 export const WHOLE_LIFE_AGE = 110;
@@ -284,8 +290,10 @@ export const hasProduct = (p?: ProductInfo): p is ProductInfo =>
   !!p && !!(p.category || p.types?.length || p.terms?.length || p.payFreqs?.length || p.sumLimit || p.renewal);
 
 /**
- * 공시이율형 적립 저축보험(적립형) — 있으면 보장성 식(유지자·보험금·보험료) 대신 적립형 식을 쓴다(savings.ts).
+ * 공시이율형 적립 저축보험(적립형) — 표준 산출방법서 모양(유지자 · 보험금 · 보장 · 보험료)은 보장성과 같고, 이 칸이 더하는 것은
+ * 공시이율·최저보증이율(적립), 보험료의 구성(사업비·위험보험료를 뺀 적립보험료), 계약자적립액, 해약·만기환급금이다(savings.ts).
  * 보험료는 계약자가 정한 **월 기본보험료**이고, 식과 값은 모두 기본보험료 1원당이다(맨 뒤에 기본보험료를 곱한다).
+ * 사망보험금 가운데 기본보험료 배수 부분은 보장(benefits — 기준 "보험료의 배수")이고, 그 위험보험료는 유지자·보험금 기수로 낸 순보험료 P 다.
  * 보장부분 확정이율은 basis.interest, 평균공시이율은 basis.averagePublished 에 둔다. 사업비는 expenses 의 α · α′ · β(기본보험료 대비).
  */
 export interface SavingsSpec {
@@ -293,8 +301,6 @@ export interface SavingsSpec {
   credited: number;
   /** 최저보증이율 — 경과 from 년부터 rate (from 오름차순, 첫 줄 from 0) */
   guarantee: { from: number; rate: number }[];
-  /** 사망보험금 = 기본보험료 × deathMultiple + 계약자적립액 (500% → 5) */
-  deathMultiple: number;
   /** 만기환급금 최저보증 — 납입보험료 × maturityFloor (100.1% → 1.001) */
   maturityFloor: number;
   /** 계약체결비용 α 를 쓰는 기간(년). 그 뒤는 α′ */
@@ -331,7 +337,7 @@ export interface MethodSpec {
   /** 위험률 합성 — 없으면 유지자·보험금이 쓰는 위험률 묶음에서 만든다 */
   combos?: ComboSpec[];
   units: UnitSpec[];
-  /** 적립형(공시이율형 저축보험) — 있으면 보장성 식 대신 적립형 식 */
+  /** 적립형(공시이율형 저축보험) — 있으면 표준 식(유지자·보험금·보장·순보험료)에 보험료의 구성·계약자적립액·환급금 식이 붙는다 */
   savings?: SavingsSpec;
   reserve: { notes: string[] };
   surrender: { deductionYears?: number; notes: string[] };

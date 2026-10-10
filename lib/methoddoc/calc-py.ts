@@ -20,7 +20,7 @@ const NAME_MAP: Record<string, string> = {
   "α_S": "alpha_S", "α_P": "alpha_P", "β_S": "beta_S", "β_G": "beta_G", "β′": "beta_prime", γ: "gamma", α: "alpha", β: "beta", ρ: "rho",
   "v^t": "vt", "v^{t+½}": "vth",
   // 적립형
-  "P^{위험}": "P_risk", "E^{체결}": "E_acq", "P^{적립}": "P_save", "j^{보증}": "j_guar", "j^{공시}": "j_pub", "α′": "alpha_p", 사망보험금: "death_benefit",
+  "P^{위험}": "P_risk", "E^{체결}": "E_acq", "P^{적립}": "P_save", "j^{보증}": "j_guar", "j^{공시}": "j_pub", "α′": "alpha_p", 사망보험금: "death_benefit", 보장금액: "S_won", 기본보험료: "G",
 };
 export function pyName(sym: string): string {
   if (NAME_MAP[sym]) return NAME_MAP[sym];
@@ -270,7 +270,11 @@ function savingsPython(spec: MethodSpec, contract: CalcContract, sheets: CalcShe
     `sex = ${q(sex === "F" ? "여" : "남")}`,
     `G = ${input("base_premium") ?? 300000}   # 월 기본보험료(원)`,
     `n = ${first?.n ?? 10}            # 보험기간(년) — 전기납 월납`,
-    `i = ${input("i_rate") ?? 0}        # 보장부분 확정이율 — 위험보험료 할인`,
+    `m = n             # 납입기간 = 보험기간`,
+    `k = 12            # 월납`,
+    `i = ${input("i_rate") ?? 0}        # 보장부분 확정이율 — 유지자·보험금 기수의 현가(위험보험료)`,
+    `v = 1 / (1 + i)   # 현가율`,
+    `S_won = ${input("S_won") ?? 0}   # 보장금액(원) — 위험보험료를 내는 보장`,
     `alpha = ${input("alpha") ?? 0}   # α 계약체결비용 (기본보험료 대비, 매월)`,
     `alpha_p = ${input("alphaPrime") ?? 0}   # α′ 계약체결비용 (그 뒤)`,
     `beta = ${input("beta") ?? 0}   # β 계약관리비용`,
@@ -279,14 +283,19 @@ function savingsPython(spec: MethodSpec, contract: CalcContract, sheets: CalcShe
   ].join("\n") }];
   for (const s of sheets) {
     if (s.error) continue;
-    const c: Ctx = { series: new Set(s.cols.map((x) => x.sym)), scalars: new Set(), known: new Set() };
+    const c: Ctx = { series: new Set(s.cols.map((x) => x.sym)), scalars: new Set(s.scalars.map((x) => x.sym)), known: new Set() };
     const rates = s.cols.filter((x) => x.kind === "rate");
+    // 유지자 · 보험금 기수(l · D · N · C · M) → 순보험료(N* · PVB · P · 위험보험료) → 보험료의 구성 · 계약자적립액 · 환급금
+    const series = s.cols.filter((x) => x.kind === "series");
+    const save = new Set(["j^{보증}", "j", "E^{체결}", "P^{적립}", "s", "AV", "해약공제", "납입누계", "W", "환급률", "사망보험금"]);
     cells.push({ title: s.name, code: [
       `# ── ${s.name} — 공시이율 j^{공시} 만 바꿔 같은 식으로 ──`,
       `j_pub = ${s.inputs.find((x) => x.name === "j_pub")?.value ?? 0}`,
       ...rates.map((r) => `${pyName(r.sym)} = [rates[${q(r.label)}].get(x + t, 0.0) for t in range(n + 1)]   # ${r.sym}: ${r.label}`),
       "",
-      ...inOrder(s.cols.filter((x) => x.kind === "series")).flatMap((col) => [...seriesLines(col, c), ""]),
+      ...inOrder(series.filter((x) => !save.has(x.sym))).flatMap((col) => [...seriesLines(col, c), ""]),
+      ...s.scalars.flatMap((sc) => [...scalarLines(sc, c), ""]),
+      ...inOrder(series.filter((x) => save.has(x.sym))).flatMap((col) => [...seriesLines(col, c), ""]),
       `results[${q(s.id)}] = [round(W[t] * G) for t in range(n + 1)]`,
       `print(${q(s.name)}, "— t, 납입누계, 계약자적립액, 환급금, 환급률")`,
       `for t in range(1, n + 1): print(t, round(paid[t] * G), round(AV[t] * G), round(W[t] * G), f"{refund_rate[t]:.1%}")`,

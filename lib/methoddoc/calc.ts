@@ -21,7 +21,7 @@
  *   기호     v 현가율 · i 적용이율 · n 보험기간 · m 납입기간 · k 납입주기 · x 가입나이 · ρ 저해지 비율
  *            α_S α_P β_S β_G β′ γ 사업비 · 위험률 기호(q · r · f · w …)는 담보별 식의 첫 줄에서 정한다
  */
-import { benefitModels, isMethodExpenses, rateSymbols, survivorModels, waitLabel, withFormulas, type BenefitModel } from "./formulas";
+import { benefitModels, isMethodExpenses, survivorModels, waitLabel, withFormulas, type BenefitModel } from "./formulas";
 import { savingsTerm } from "./savings";
 import { benefitAmount, coverYears, rateTable, unitOf, WHOLE_LIFE_AGE, type FormulaSpec, type MethodSpec, type RateRef, type Sex } from "./spec";
 
@@ -426,12 +426,13 @@ function survivorLabel(name: string): string | undefined {
  * 담보 하나를 계산할 준비 — 기간·위험률 계열·기호 값·식 목록. computeSpec 과 계산 표(calcSheets)가 같은 것을 쓴다.
  * 모델까지 만든다: 해약공제 기준 신계약비의 표준기초율 값(α^표준)은 같은 식을 표준이율로 한 번 더 계산해 기호 값으로 준다.
  */
-function prepare(spec: MethodSpec, m: BenefitModel, contract: CalcContract, formulas: FormulaSpec[]) {
+function prepare(spec: MethodSpec, m: BenefitModel, contract: CalcContract, formulas: FormulaSpec[], basePrem = 0) {
   const b = m.b;
   const n = Math.max(1, Math.min(contract.termYears ?? 999, coverYears(b.endAge, contract.age)));
   const pay = Math.min(contract.payYears, n);
   const sumAssured = contract.sumAssured ?? SUM_ASSURED_DEFAULT;
-  const amount = benefitAmount(b, sumAssured);
+  // 보험료의 배수 보장 — 기준 보험료(적립형 기본보험료 · 보장성 정액 보장의 1회 보험료 합) × 배수
+  const amount = benefitAmount(b, sumAssured, basePrem);
   const known: Record<string, number[]> = {};
   const label: Record<string, string> = { ...SYM_LABEL };
   const missing: string[] = [];
@@ -517,13 +518,18 @@ function premiumOf(mo: Model, amount: number) {
 export function computeSpec(spec: MethodSpec, contract: CalcContract = CALC_DEFAULT): CalcResult {
   const formulas = withFormulas(spec).formulas;
   const out: CalcResult = { contract, benefits: [], premium: 0, missingRates: [], errors: [] };
-  for (const m of benefitModels(spec)) {
-    const b = m.b;
-    const { n, pay, amount, known, scalar, missing, text, meth } = prepare(spec, m, contract, formulas);
+  const sav = !!spec.savings;
+  const c = sav ? savingsContract(spec, contract) : contract;
+  const unitPrem = new Map<string, number>();
+  const results: BenefitResult[] = [];
+  for (const m of premiumFirst(benefitModels(spec))) {
+    const b = m.b, unit = unitOf(b);
+    const basePrem = sav ? contract.basePremium ?? BASE_PREMIUM_DEFAULT : unitPrem.get(unit) ?? 0;
+    const { n, pay, amount, known, scalar, missing, text, meth } = prepare(spec, m, c, formulas, basePrem);
     for (const name of missing) if (!out.missingRates.includes(name)) out.missingRates.push(name);
     const { eqs, skipped } = parseCached(text);
     const res: BenefitResult = {
-      id: b.id, name: b.name, unit: unitOf(b), group: `lx(${m.survivor.k}) ${m.survivor.label}`, payer: `lx(${m.pay.k}) ${m.pay.label}`, n, m: pay, amount,
+      id: b.id, name: b.name, unit, group: `lx(${m.survivor.k}) ${m.survivor.label}`, payer: `lx(${m.pay.k}) ${m.pay.label}`, n, m: pay, amount,
       pvb: 0, nStar: 0, net: 0, base: 0, gross: 0, gross6: 0, per100k: 0, premium: 0, skipped,
     };
     try {
@@ -531,16 +537,29 @@ export function computeSpec(spec: MethodSpec, contract: CalcContract = CALC_DEFA
       res.pvb = valueOf(mo, "PVB");
       res.nStar = valueOf(mo, "N*");
       res.net = valueOf(mo, "P");
-      res.base = valueOf(mo, "P_base");
-      Object.assign(res, premiumOf(mo, amount));
-      out.premium += res.premium;
+      // 적립형은 보험료가 정해져 있어 순보험료 P(보장부분 — 위험보험료)까지만 — 영업보험료 식이 없다
+      if (!sav) {
+        res.base = valueOf(mo, "P_base");
+        Object.assign(res, premiumOf(mo, amount));
+        out.premium += res.premium;
+        if (b.base !== "premium") unitPrem.set(unit, (unitPrem.get(unit) ?? 0) + res.premium);
+      }
     } catch (e) {
       res.error = e instanceof Error ? e.message : String(e);
       out.errors.push(`${b.name}: ${res.error}`);
     }
-    out.benefits.push(res);
+    results[m.idx] = res;
   }
+  out.benefits = results.filter(Boolean);
   return out;
+}
+
+/** 정액 보장을 먼저 — 보험료의 배수 보장은 그 계약 단위 정액 보장의 1회 보험료 합을 기준으로 한다(그 보장 자신의 보험료는 넣지 않는다) */
+const premiumFirst = (ms: BenefitModel[]) => [...ms].sort((a, b) => Number(a.b.base === "premium") - Number(b.b.base === "premium"));
+/** 적립형의 계산 계약 — 보험기간 = 가입 조건의 기간 가운데 고른 것, 전기납 월납 */
+function savingsContract(spec: MethodSpec, contract: CalcContract): CalcContract {
+  const n = savingsTerm(spec, contract.payYears);
+  return { ...contract, termYears: n, payYears: n, freq: 12 };
 }
 
 /** 납입방법(월납·3개월납·6개월납·연납)마다 보험료 — 시산보험료 조건 줄이 보인다. 보험금의 현가는 같고 N* 만 다르다 */
@@ -559,7 +578,8 @@ export function survivorTables(spec: MethodSpec, contract: CalcContract = CALC_D
   const formulas = withFormulas(spec).formulas;
   return survivorModels(spec).map((sv) => {
     const users = sv.benefitIdx.map((i) => spec.benefits[i]);
-    const n = Math.max(1, ...(users.length ? users : [{ endAge: WHOLE_LIFE_AGE }]).map((b) => coverYears(b.endAge, contract.age)));
+    // 적립형은 보험기간(고른 기간)까지
+    const n = spec.savings ? savingsTerm(spec, contract.payYears) : Math.max(1, ...(users.length ? users : [{ endAge: WHOLE_LIFE_AGE }]).map((b) => coverYears(b.endAge, contract.age)));
     const ages = Array.from({ length: n + 1 }, (_, t) => contract.age + t);
     const out = { id: sv.id, k: sv.k, label: sv.label, ages, l: [] as number[], D: [] as number[], N: [] as number[] };
     const f = formulas.find((x) => x.key === `surv:${sv.id}`);
@@ -653,6 +673,8 @@ export interface CalcSheet {
   /** 보장금액(원) = 가입금액 × 배수 */
   amount: number;
   multiple?: number;
+  /** 보장금액 기준이 보험료의 배수인지 */
+  base?: "premium";
   per100k: number;
   premium: number;
   /** 식으로 세우지 못한 열·값 (그 열만 빠진다) */
@@ -692,9 +714,11 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
   if (spec.savings) return savingsSheets(spec, contract);
   const formulas = withFormulas(spec).formulas;
   const out: CalcSheets = { contract, sheets: [], premium: 0, per100k: 0, missingRates: [] };
-  for (const bm of benefitModels(spec)) {
-    const b = bm.b;
-    const { n, pay, amount, sumAssured, known, scalar, label, missing, text, meth } = prepare(spec, bm, contract, formulas);
+  const unitPrem = new Map<string, number>();
+  const sheets: CalcSheet[] = [];
+  for (const bm of premiumFirst(benefitModels(spec))) {
+    const b = bm.b, prem = b.base === "premium";
+    const { n, pay, amount, sumAssured, known, scalar, label, missing, text, meth } = prepare(spec, bm, contract, formulas, unitPrem.get(unitOf(b)) ?? 0);
     for (const name of missing) if (!out.missingRates.includes(name)) out.missingRates.push(name);
     // 지급자수 d 는 문서의 C 식에서 v^{t+½} 를 뺀 부분이다 — 표에서만 따로 보여 준다
     const { eqs } = parseCached(`${text}\n${bm.payout}`);
@@ -712,8 +736,8 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
         { label: "적용이율 i", name: "i_rate", value: scalar.i, digits: 6 },
         { label: "현가율 v", name: "v_disc", value: scalar.v, digits: 10, formula: "v = 1 / ( 1 + i )" },
         ...(spec.basis.standardInterest !== undefined ? [{ label: "표준이율", name: "i_std", value: spec.basis.standardInterest, digits: 6, note: "해약공제 기준 신계약비의 표준기초율 값에" }] : []),
-        ...(b.multiple !== undefined ? [{ label: "보장금액 배수", name: "S_mult", value: b.multiple, digits: 2, note: "가입금액 대비", perBenefit: true }] : []),
-        { label: "보장금액", name: "S_amt", value: amount, digits: 0, note: b.multiple !== undefined ? "원 = 가입금액 × 배수" : "원", perBenefit: true, ...(b.multiple !== undefined ? { formula: "S = 가입금액 × 배수" } : {}) },
+        ...(b.multiple !== undefined ? [{ label: "보장금액 배수", name: "S_mult", value: b.multiple, digits: 2, note: prem ? "보험료 대비 — 이 계약 단위 정액 보장의 1회 보험료 합" : "가입금액 대비", perBenefit: true }] : []),
+        { label: "보장금액", name: "S_amt", value: amount, digits: 0, note: prem ? "원 = 정액 보장의 1회 보험료 합 × 배수" : b.multiple !== undefined ? "원 = 가입금액 × 배수" : "원", perBenefit: true, ...(b.multiple !== undefined && !prem ? { formula: "S = 가입금액 × 배수" } : {}) },
         ...(b.waitDays ? [{ label: "면책·삭감", value: waitLabel(b), note: "보장금액의 배수 S 에 반영", perBenefit: true }] : []),
         ...(meth
           ? ([["α_S", "alphaS"], ["α_P", "alphaP"], ["β_S", "betaS"], ["β_G", "betaG"], ["β′", "betaPrime"], ["γ", "gamma"]] as const)
@@ -721,60 +745,65 @@ export function calcSheets(spec: MethodSpec, contract: CalcContract = CALC_DEFAU
               ...(sym === "α_P" ? { perBenefit: true, ...(n < 20 ? { note: `보장기간이 20년보다 짧아 × ${n}/20` } : {}) } : {}) }))
           : ([["α", "alpha"], ["β", "beta"], ["γ", "gamma"]] as const).map(([sym, name]) => ({ label: sym, name, value: scalar[sym] ?? 0, digits: 8 }))),
       ],
-      cols: [], scalars: [], amount, multiple: b.multiple, per100k: 0, premium: 0, warnings: [],
+      cols: [], scalars: [], amount, multiple: b.multiple, ...(prem ? { base: "premium" as const } : {}), per100k: 0, premium: 0, warnings: [],
     };
     try {
       const mo = buildModel(spec, eqs, known, scalar, n, meth);
       const rateSyms = [...new Set(symsOf(bm).map((x) => x.sym))];
       const sourceOf = (sym: string) => symsOf(bm).find((x) => x.sym === sym)?.rate;
-      for (const sym of [...rateSyms, ...(known.w ? ["w"] : [])]) {
-        const r = sourceOf(sym);
-        sheet.cols.push({
-          sym, label: label[sym] ?? sym, kind: "rate", digits: 8, values: known[sym] ?? [], parts: NO_PARTS, offset: 0,
-          formula: sym === "w" ? "조건 1.3. 적용해지율 — 납입기간 중" : `위험률 표에서 온 값${r?.source ? ` — ${r.source}` : ""}`,
-        });
-      }
-      // 현가율 — 위험률 바로 오른쪽. 값이 아니라 적용이율에서 나오는 식이다(D 는 v^t 를, C 는 v^{t+½} 를 쓴다)
-      for (const [sym, why] of [["v^t", "그 해 초의 현가율 — 유지자수·납입자수의 현가 D·D′ 에 쓴다"],
-        ["v^{t+½}", "그 해 가운데의 현가율 — 급부는 연도 중앙에 생긴다고 보아 C 에 쓴다"]] as const) {
-        const half = sym.includes("½") ? 0.5 : 0;
-        sheet.cols.push({
-          sym, label: "현가율", kind: "discount", digits: 10, offset: 0, parts: NO_PARTS,
-          formula: `${sym} = ( 1 / ( 1 + i ) )^{t${half ? "+½" : ""}} — ${why}`,
-          values: Array.from({ length: n + 1 }, (_, t) => scalar.v ** (t + half)),
-        });
-      }
-      const survNames = [...mo.defs.keys()].filter((x) => survivorLabel(x) && isSeries(mo, x))
-        .sort((a, b) => Number(/\((\d+)\)/.exec(a)![1]) - Number(/\((\d+)\)/.exec(b)![1]) || "RQlDN".indexOf(a[0]) - "RQlDN".indexOf(b[0]));
-      for (const x of survNames) label[x] = survivorLabel(x)!;
-      const names = [...survNames, ...COL_ORDER.filter((x) => mo.defs.has(x)), ...[...mo.defs.keys()].filter((x) => !COL_ORDER.includes(x) && !survNames.includes(x) && isSeries(mo, x))];
-      for (const sym of names) {
-        // 표준기초율 책임준비금 — 식이 아니라 같은 식(V)을 표준이율로 세운 값(buildModel). 결산 적립금 바로 앞에 둔다
-        if (sym === "V^{결산}" && known["V^{표준}"]) sheet.cols.push({ sym: "V^{표준}", label: "표준기초율 책임준비금", kind: "series", digits: 8, values: known["V^{표준}"], parts: NO_PARTS, offset: 0,
-          formula: "V^{표준}_t — 같은 식(V)을 표준이율로 계산한 값 (앱이 계산)" });
-        const c = seriesColumn(mo, sym, label[sym] ?? sym, n, contract.age, sheet.warnings);
-        if (c) sheet.cols.push(c);
-      }
-      for (const sym of [...SCALARS.filter((x) => mo.defs.has(x)), ...[...mo.defs.keys()].filter((x) => !SCALARS.includes(x) && !isSeries(mo, x) && !!mo.defs.get(x)?.scalar)]) {
-        // 표준기초율 신계약비 — 식이 아니라 같은 식을 표준이율로 한 번 더 세워 얻은 값(buildModel). 해약공제 신계약비 바로 앞에 둔다(엑셀·파이썬이 이 값을 먼저 쓴다)
-        if (sym === "α^{공제}" && Number.isFinite(scalar["α^{표준}"])) sheet.scalars.push({ sym: "α^{표준}", label: "표준기초율 신계약비 (표준이율로 P_base 를 다시 계산)", formula: "α^{표준} = α_S + α_P·round₅( P_base^{표준} ) — P_base^{표준} 은 표준이율 i_std 로 같은 식을 계산한 값", value: scalar["α^{표준}"], digits: 8 });
-        const d = mo.defs.get(sym)!;
-        const eq = d.scalar ?? d.direct;
-        try {
-          sheet.scalars.push({ sym, label: label[sym] ?? sym, formula: eq?.line ?? "", value: valueOf(mo, sym), digits: sym === "N*" ? 2 : sym === "G_10만" ? 0 : sym === "G₁" ? 6 : 8, eq });
-        } catch (e) { sheet.warnings.push(`${sym}: ${e instanceof Error ? e.message : String(e)}`); }
-      }
+      fillSheet(sheet, mo, [...rateSyms, ...(known.w ? ["w"] : [])].map((sym) => ({ sym, label: label[sym] ?? sym, values: known[sym] ?? [],
+        formula: sym === "w" ? "조건 1.3. 적용해지율 — 납입기간 중" : `위험률 표에서 온 값${sourceOf(sym)?.source ? ` — ${sourceOf(sym)!.source}` : ""}` })), label, n, contract.age, COL_ORDER);
       const p = premiumOf(mo, amount);
       sheet.per100k = p.per100k;
       sheet.premium = p.premium;
       out.premium += sheet.premium;
       out.per100k += sheet.per100k;
+      if (!prem) unitPrem.set(sheet.unit, (unitPrem.get(sheet.unit) ?? 0) + sheet.premium);
     } catch (e) {
       sheet.error = e instanceof Error ? e.message : String(e);
     }
-    out.sheets.push(sheet);
+    sheets[bm.idx] = sheet;
   }
+  out.sheets = sheets.filter(Boolean);
   return out;
+}
+
+/**
+ * 계산 표의 열과 값 — 위험률 · 현가율 · 계열(유지자 lx(k) 먼저, 그 뒤 order 차례) · 표 아래 한 값. 보장성 담보와 적립형 예시가 함께 쓴다.
+ * 열 하나를 세우지 못하면 그 열만 빼고 warnings 에 적는다
+ */
+function fillSheet(sheet: CalcSheet, mo: Model, rates: { sym: string; label: string; values: number[]; formula: string }[], label: Record<string, string>, n: number, age: number, order: string[], digits: Record<string, number> = {}) {
+  for (const r of rates) sheet.cols.push({ ...r, kind: "rate", digits: 8, parts: NO_PARTS, offset: 0 });
+  // 현가율 — 위험률 바로 오른쪽. 값이 아니라 적용이율에서 나오는 식이다(D 는 v^t 를, C 는 v^{t+½} 를 쓴다)
+  for (const [sym, why] of [["v^t", "그 해 초의 현가율 — 유지자수·납입자수의 현가 D·D′ 에 쓴다"],
+    ["v^{t+½}", "그 해 가운데의 현가율 — 급부는 연도 중앙에 생긴다고 보아 C 에 쓴다"]] as const) {
+    const half = sym.includes("½") ? 0.5 : 0;
+    sheet.cols.push({
+      sym, label: "현가율", kind: "discount", digits: 10, offset: 0, parts: NO_PARTS,
+      formula: `${sym} = ( 1 / ( 1 + i ) )^{t${half ? "+½" : ""}} — ${why}`,
+      values: Array.from({ length: n + 1 }, (_, t) => mo.scalar.v ** (t + half)),
+    });
+  }
+  const survNames = [...mo.defs.keys()].filter((x) => survivorLabel(x) && isSeries(mo, x))
+    .sort((a, b) => Number(/\((\d+)\)/.exec(a)![1]) - Number(/\((\d+)\)/.exec(b)![1]) || "RQlDN".indexOf(a[0]) - "RQlDN".indexOf(b[0]));
+  for (const x of survNames) label[x] = survivorLabel(x)!;
+  const names = [...survNames, ...order.filter((x) => mo.defs.has(x)), ...[...mo.defs.keys()].filter((x) => !order.includes(x) && !survNames.includes(x) && isSeries(mo, x))];
+  for (const sym of names) {
+    // 표준기초율 책임준비금 — 식이 아니라 같은 식(V)을 표준이율로 세운 값(buildModel). 결산 적립금 바로 앞에 둔다
+    if (sym === "V^{결산}" && mo.known["V^{표준}"]) sheet.cols.push({ sym: "V^{표준}", label: "표준기초율 책임준비금", kind: "series", digits: 8, values: mo.known["V^{표준}"], parts: NO_PARTS, offset: 0,
+      formula: "V^{표준}_t — 같은 식(V)을 표준이율로 계산한 값 (앱이 계산)" });
+    const c = seriesColumn(mo, sym, label[sym] ?? sym, n, age, sheet.warnings);
+    if (c) sheet.cols.push(digits[sym] !== undefined ? { ...c, digits: digits[sym] } : c);
+  }
+  for (const sym of [...SCALARS.filter((x) => mo.defs.has(x)), ...[...mo.defs.keys()].filter((x) => !SCALARS.includes(x) && !isSeries(mo, x) && !!mo.defs.get(x)?.scalar)]) {
+    // 표준기초율 신계약비 — 식이 아니라 같은 식을 표준이율로 한 번 더 세워 얻은 값(buildModel). 해약공제 신계약비 바로 앞에 둔다(엑셀·파이썬이 이 값을 먼저 쓴다)
+    if (sym === "α^{공제}" && Number.isFinite(mo.scalar["α^{표준}"])) sheet.scalars.push({ sym: "α^{표준}", label: "표준기초율 신계약비 (표준이율로 P_base 를 다시 계산)", formula: "α^{표준} = α_S + α_P·round₅( P_base^{표준} ) — P_base^{표준} 은 표준이율 i_std 로 같은 식을 계산한 값", value: mo.scalar["α^{표준}"], digits: 8 });
+    const d = mo.defs.get(sym)!;
+    const eq = d.scalar ?? d.direct;
+    try {
+      sheet.scalars.push({ sym, label: label[sym] ?? sym, formula: eq?.line ?? "", value: valueOf(mo, sym), digits: sym === "N*" ? 2 : sym === "G_10만" ? 0 : sym === "G₁" ? 6 : 8, eq });
+    } catch (e) { sheet.warnings.push(`${sym}: ${e instanceof Error ? e.message : String(e)}`); }
+  }
 }
 
 /** 계열 하나를 표의 열로 — 식 · 값 · 칸을 누르면 보일 쓰인 값. 못 세우면 warnings 에 적고 null */
@@ -810,36 +839,39 @@ export const SAVINGS_SCENARIOS = [
 export type SavingsScenario = (typeof SAVINGS_SCENARIOS)[number]["id"];
 /** 한 해 끝의 값(원) — 납입누계 · 계약자적립액 · 해약(만기)환급금 · 환급률 · 사망보험금 */
 export interface SavingsRow { t: number; age: number; paid: number; av: number; w: number; ratio: number; death: number }
-export interface SavingsResult { scenario: SavingsScenario; label: string; rate: number; n: number; basePremium: number; rows: SavingsRow[]; missingRates: string[]; error?: string }
+/** risk — 월 위험보험료(원) · accum — 첫해 월 적립보험료(원) */
+export interface SavingsResult { scenario: SavingsScenario; label: string; rate: number; n: number; basePremium: number; risk: number; accum: number; rows: SavingsRow[]; missingRates: string[]; error?: string }
 
 const SAVE_LABEL: Record<string, string> = {
-  "j^{보증}": "최저보증이율", j: "적용이율", "P^{위험}": "위험보험료 (월)", "E^{체결}": "계약체결비용 (월)", "P^{적립}": "적립보험료 (월)",
+  "j^{보증}": "최저보증이율", j: "적용이율", "P^{위험}": "위험보험료 (월 — 보장금액 배수 × P)", "E^{체결}": "계약체결비용 (월)", "P^{적립}": "적립보험료 (월)",
   s: "월 적립 계수", AV: "계약자적립액", 해약공제: "해약공제", 납입누계: "납입보험료 누계", W: "해약환급금 · 만기환급금", 환급률: "환급률", 사망보험금: "사망보험금",
 };
 const SAVE_ORDER = Object.keys(SAVE_LABEL);
 const SAVE_DIGITS: Record<string, number> = { "j^{보증}": 6, j: 6, "P^{위험}": 8, "E^{체결}": 6, "P^{적립}": 8, s: 8, AV: 6, 해약공제: 6, 납입누계: 0, W: 6, 환급률: 4, 사망보험금: 6 };
 
-/** 적립형 모델 — 식(save:*) · 위험률 계열 · 기호 값(i · α · α′ · β · j^{공시}) */
+/**
+ * 적립형 모델 — 표준 식(첫 보장의 유지자 · 보험금 · N* · P) + 적립형 식(save:*) · 위험률 계열 · 기호 값(i · α · α′ · β · j^{공시} · 보장금액 · 기본보험료).
+ * 보험기간 = 고른 기간(전기납 월납 — k 12), 보험료의 배수 보장의 기준은 월 기본보험료
+ */
 function savingsModel(spec: MethodSpec, contract: CalcContract, scenario: SavingsScenario) {
   const s = spec.savings!;
-  const n = savingsTerm(spec, contract.payYears);
-  const formulas = withFormulas(spec).formulas.filter((f) => f.key?.startsWith("save:"));
-  const known: Record<string, number[]> = {}, label: Record<string, string> = { ...SAVE_LABEL }, missing: string[] = [];
-  const symOf = rateSymbols(spec);
-  for (const r of spec.rates) {
-    const sym = symOf.get(r.id);
-    if (!sym || known[sym]) continue;
-    const { values, ok } = rateSeries(r, contract, n + 1);
-    known[sym] = values; label[sym] = r.name;
-    if (!ok) missing.push(r.name);
-  }
-  const ex = (re: RegExp) => spec.expenses.find((e) => re.test(e.symbol))?.rate ?? 0;
+  const c = savingsContract(spec, contract), n = c.payYears;
+  const G = contract.basePremium ?? BASE_PREMIUM_DEFAULT;
+  const formulas = withFormulas(spec).formulas;
+  // 위험보험료는 첫 보장(savingsBenefit) — 그 보장의 유지자 · 보험금 · 순보험료 식을 함께 세운다
+  const bm = spec.benefits.length ? benefitModels(spec)[0] : undefined;
+  const base = bm ? prepare(spec, bm, c, formulas, G) : undefined;
   const i = spec.basis.interest ?? 0;
+  const known: Record<string, number[]> = base?.known ?? {}, label: Record<string, string> = { ...(base?.label ?? SYM_LABEL), ...SAVE_LABEL }, missing = base?.missing ?? [];
+  const ex = (re: RegExp) => spec.expenses.find((e) => re.test(e.symbol))?.rate ?? 0;
   const rate = scenario === "credited" ? s.credited : scenario === "average" ? spec.basis.averagePublished ?? s.credited : 0;
-  const scalar: Record<string, number> = { n, m: n, k: 12, x: contract.age, i, v: 1 / (1 + i), α: ex(/^α$/), "α′": ex(/^α['′]$/), β: ex(/^β$/), "j^{공시}": rate };
-  const { eqs, skipped } = parseCached(formulas.map((f) => f.text).join("\n"));
+  const amount = base?.amount ?? 0;
+  const scalar: Record<string, number> = { ...(base?.scalar ?? { n, m: n, k: 12, x: contract.age, i, v: 1 / (1 + i) }),
+    α: ex(/^α$/), "α′": ex(/^α['′]$/), β: ex(/^β$/), "j^{공시}": rate, 보장금액: amount, 기본보험료: G };
+  const text = [base?.text ?? "", ...formulas.filter((f) => f.key?.startsWith("save:")).map((f) => f.text)].join("\n");
+  const { eqs, skipped } = parseCached(text);
   const mo: Model = { defs: buildDefs(eqs), known, scalar, n };
-  return { mo, n, rate, label, missing, skipped };
+  return { mo, n, rate, label, missing, skipped, bm, amount };
 }
 
 /** 적립형 한 예시 — 해마다 납입누계 · 계약자적립액 · 환급금 · 환급률 · 사망보험금(원 = 1원당 값 × 기본보험료, 원 미만 반올림) */
@@ -847,9 +879,11 @@ export function computeSavings(spec: MethodSpec, contract: CalcContract, scenari
   const G = contract.basePremium ?? BASE_PREMIUM_DEFAULT;
   const label = SAVINGS_SCENARIOS.find((x) => x.id === scenario)!.label;
   const { mo, n, rate, missing } = savingsModel(spec, contract, scenario);
-  const out: SavingsResult = { scenario, label, rate, n, basePremium: G, rows: [], missingRates: missing };
+  const out: SavingsResult = { scenario, label, rate, n, basePremium: G, risk: 0, accum: 0, rows: [], missingRates: missing };
   try {
     const won = (name: string, t: number) => Math.round(valueOf(mo, name, t) * G);
+    out.risk = Math.round(valueOf(mo, "P^{위험}") * G);
+    out.accum = won("P^{적립}", 0);
     for (let t = 0; t <= n; t++) out.rows.push({ t, age: contract.age + t, paid: won("납입누계", t), av: won("AV", t), w: won("W", t), ratio: valueOf(mo, "환급률", t), death: won("사망보험금", t) });
   } catch (e) { out.error = e instanceof Error ? e.message : String(e); }
   return out;
@@ -860,35 +894,33 @@ function savingsSheets(spec: MethodSpec, contract: CalcContract): CalcSheets {
   const G = contract.basePremium ?? BASE_PREMIUM_DEFAULT;
   const out: CalcSheets = { contract, sheets: [], premium: G, per100k: 0, missingRates: [] };
   for (const sc of SAVINGS_SCENARIOS) {
-    const { mo, n, rate, label, missing } = savingsModel(spec, contract, sc.id);
+    const { mo, n, rate, label, missing, bm, amount } = savingsModel(spec, contract, sc.id);
     for (const name of missing) if (!out.missingRates.includes(name)) out.missingRates.push(name);
+    const b = bm?.b;
     const sheet: CalcSheet = {
-      id: sc.id, name: `${sc.label}${sc.id === "guarantee" ? "" : ` ${(rate * 100).toFixed(2)}%`}`, unit: "주계약", group: "", n, m: n,
+      id: sc.id, name: `${sc.label}${sc.id === "guarantee" ? "" : ` ${(rate * 100).toFixed(2)}%`}`, unit: "주계약", group: bm ? `lx(${bm.survivor.k}) ${bm.survivor.label}` : "", n, m: n,
       ages: Array.from({ length: n + 1 }, (_, t) => contract.age + t),
       inputs: [
         { label: "가입나이 x", name: "x_age", value: contract.age, digits: 0, note: "세" },
         { label: "성별", value: contract.sex === "F" ? "여" : "남" },
         { label: "기본보험료 (월)", name: "base_premium", value: G, digits: 0, note: "원 — 값은 모두 기본보험료 1원당" },
-        { label: "보험기간 n", name: "n_term", value: n, digits: 0, note: "년 — 전기납 월납", perBenefit: true },
-        { label: "보장부분 확정이율 i", name: "i_rate", value: mo.scalar.i, digits: 6, note: "위험보험료 할인" },
+        { label: "보험기간 n", name: "n_term", value: n, digits: 0, note: "년 — 전기납 월납 (납입기간 m = n)", perBenefit: true },
+        { label: "납입주기 k", name: "k_freq", value: 12, digits: 0, note: "월납" },
+        { label: "보장부분 확정이율 i", name: "i_rate", value: mo.scalar.i, digits: 6, note: "유지자·보험금 기수의 현가" },
         { label: "현가율 v", name: "v_disc", value: mo.scalar.v, digits: 10, formula: "v = 1 / ( 1 + i )" },
         { label: "공시이율", name: "j_pub", value: rate, digits: 6, perBenefit: true, note: sc.id === "guarantee" ? "0 — 최저보증이율만" : sc.label },
         { label: "α 계약체결비용", name: "alpha", value: mo.scalar["α"], digits: 6 },
         { label: "α′ 계약체결비용 (이후)", name: "alphaPrime", value: mo.scalar["α′"], digits: 6 },
         { label: "β 계약관리비용", name: "beta", value: mo.scalar["β"], digits: 6 },
+        ...(b ? [{ label: `보장금액 — ${b.name}`, name: "S_won", value: amount, digits: 0, note: b.base === "premium" ? `원 = 기본보험료 × ${b.multiple ?? 0}` : "원 (정액)" }] : []),
       ],
       cols: [], scalars: [], amount: G, per100k: 0, premium: G, warnings: [], savings: true,
     };
     try {
-      for (const [sym, values] of Object.entries(mo.known)) {
-        const src = spec.rates.find((r) => r.name === label[sym])?.source;
-        sheet.cols.push({ sym, label: label[sym] ?? sym, kind: "rate", digits: 8, values, parts: NO_PARTS, offset: 0, formula: `위험률 표에서 온 값${src ? ` — ${src}` : ""}` });
-      }
-      const names = [...SAVE_ORDER.filter((x) => isSeries(mo, x)), ...[...mo.defs.keys()].filter((x) => !SAVE_ORDER.includes(x) && isSeries(mo, x))];
-      for (const sym of names) {
-        const c = seriesColumn(mo, sym, label[sym] ?? sym, n, contract.age, sheet.warnings);
-        if (c) sheet.cols.push({ ...c, digits: SAVE_DIGITS[sym] ?? c.digits });
-      }
+      const syms = bm ? [...new Set(symsOf(bm).map((x) => x.sym))] : [];
+      const src = (sym: string) => bm && symsOf(bm).find((x) => x.sym === sym)?.rate.source;
+      fillSheet(sheet, mo, syms.map((sym) => ({ sym, label: label[sym] ?? sym, values: mo.known[sym] ?? [], formula: `위험률 표에서 온 값${src(sym) ? ` — ${src(sym)}` : ""}` })),
+        label, n, contract.age, [...COL_ORDER.filter((x) => !SAVE_ORDER.includes(x)), ...SAVE_ORDER], SAVE_DIGITS);
       const w = valueOf(mo, "W", n), paid = valueOf(mo, "납입누계", n);
       sheet.maturity = { won: Math.round(w * G), ratio: paid ? w / paid : 0 };
     } catch (e) { sheet.error = e instanceof Error ? e.message : String(e); }

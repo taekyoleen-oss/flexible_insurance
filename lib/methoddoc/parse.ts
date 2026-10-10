@@ -364,7 +364,8 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
  *  - 유지자 표: "대상 위험률 | Q^{(k)} = … 또는 q_{x+t}" · "계산기수 | l^{(k)}_{x+t+1} = …" · "현가누계 | D′ …(납입이면 D′)". 이름은 앞 문단 "(k) l^{(k)}_x — 이름"
  *  - 보험금 표: "대상자수 | l^{(k)}_{x+t}" · "계산기수 | d^{(k)} = l^{(k)} × 발생률" · "현가 및 누계"(옛 판 "계산기수") — 발생률의 기호로 급부 유형·급부 위험률을 정한다
  *  - 위험률 합성 표(나. 기호의 정의 아래): "기호 | 이름 | 식" — Q^{(j)} · R^{(j)} 를 위험률로 펼친다. 옛 판은 유지자 표의 대상 위험률에 합성 식이 그대로 있다
- *  - 보장 표: "구분 | (계약 단위) | (보험기간) | 보장금액 배수 | 면책 | 삭감기간 | 삭감 시 지급률" — 보험금 표와 같은 차례
+ *  - 보장 표: "구분 | (계약 단위) | (보험기간) | (보장금액 기준) | 보장금액 배수 | 면책 | 삭감기간 | 삭감 시 지급률" — 보험금 표와 같은 차례.
+ *    보장금액 기준이 "보험료" · "기본보험료" 면 보험료의 배수(base: premium), 없거나 "가입금액" 이면 정액
  * v8 표가 없으면 false (옛 판은 readSurvivorTables · readBenefitTable 이 읽는다)
  */
 function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warnings: string[], paragraphs: string[]): boolean {
@@ -478,6 +479,7 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
     const role: BenefitSpec["role"] = combined ? "death" : ill ? "incidence" : rate?.role === "death" ? "death" : rate?.role === "recurring" ? "recurring" : "incidence";
     const bs: BenefitSpec = { id: `b${spec.benefits.length + 1}`, name, role, ...(unit && unit !== "주계약" ? { unit } : {}),
       ...(sv ? { survivorId: sv.id, ...(sv.exitRateIds.length ? { exitRateIds: [...sv.exitRateIds] } : {}) } : {}) };
+    if (/보험료/.test(get("보장금액기준"))) bs.base = "premium";
     const mult = get("보장금액배수");
     if (/원/.test(mult)) { const a = numIn(mult); if (a !== null) bs.amount = a; }
     else if (mult && mult !== "—") { const v = Number(mult.replace(/배$/, "")); if (Number.isFinite(v)) bs.multiple = v; }
@@ -686,7 +688,7 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
 }
 
 /**
- * 적립형 — 이 앱이 낸 적립형 산출방법서의 "적립 조건 | 값" 표(사망보험금 배수 · 만기 최저보증 · α 기간 · 해약공제)와
+ * 적립형 — 이 앱이 낸 적립형 산출방법서의 "적립 조건 | 값" 표(만기 최저보증 · α 기간 · 해약공제 — 가.(5))와
  * 예정이율 표의 "공시이율 (예시 …)" · "최저보증이율 — 경과 …" 행. 적립 조건 표가 없으면 적립형이 아니다.
  * 최저보증이율 행은 본문 규칙이 basis.minGuaranteed 로도 줍는다 — 적립형은 구간별로 savings 에 두므로 그것은 지운다.
  */
@@ -702,10 +704,10 @@ function readSavings(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]) 
   });
   spec.savings = {
     credited: rate(/^공시\s*이율/, 0), guarantee,
-    deathMultiple: rate(/^사망보험금/, 0), maturityFloor: rate(/^만기환급금\s*최저보증/, 1),
+    maturityFloor: rate(/^만기환급금\s*최저보증/, 1),
     alphaYears: years(/^계약체결비용.*기간/, 7), deductRatio: rate(/^해약공제\s*—/, 0), deductYears: years(/^해약공제\s*기간/, 7),
   };
-  evidence.push({ path: "savings", label: "적립 조건", value: `공시이율 ${spec.savings.credited} · 최저보증 ${guarantee.length}구간`, raw: "적립 조건 표", source: "표준 양식", confidence: "high" });
+  evidence.push({ path: "savings", label: "적립 조건", value: `공시이율 ${spec.savings!.credited} · 최저보증 ${guarantee.length}구간`, raw: "적립 조건 표", source: "표준 양식", confidence: "high" });
   delete spec.basis.minGuaranteed;
   const i = evidence.findIndex((e) => e.path === "basis.minGuaranteed");
   if (i >= 0) evidence.splice(i, 1);

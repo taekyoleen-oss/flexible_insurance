@@ -1,13 +1,15 @@
-import type { FormulaSpec, MethodSpec, SavingsSpec } from "./spec";
+import type { BenefitSpec, FormulaSpec, MethodSpec, SavingsSpec } from "./spec";
 
 /**
  * 공시이율형 적립 저축보험(적립형)의 식 — 조건(spec.savings)에서 만든다. 앱에 딸리지 않는다(import 는 spec 뿐).
  *
- * 보장성 상품(유지자 → 보험금 → 보험료)과 달리 보험료가 정해져 있고(월 기본보험료), 그 보험료에서 사업비·위험보험료를 뺀
- * 적립보험료를 공시이율로 쌓아 계약자적립액을 낸다. 식과 값은 모두 **기본보험료 1원당**이다.
- *   1장 라. 보험료의 구성        위험보험료 P^{위험} · 계약체결비용 E^{체결} · 적립보험료 P^{적립}
+ * **표준 산출방법서와 같은 모양이다**(사용자 요청 2026-10-10 — 기본 포맷을 지키고 적립형에만 필요한 것을 더한다):
+ * 유지자 lx(k) · 보험금(C · M) · 보장(보장금액 기준 = 보험료의 배수) · 순보험료 P 는 보장성과 같은 식(formulas.ts)이고,
+ * 여기서 더하는 것은 보험료가 정해진 적립형의 몫이다. 식과 값은 모두 **기본보험료 1원당**이다.
+ *   1장 라. 보험금               사망보험금 = 보장금액 + 계약자적립액
+ *   1장 바. 보험료의 구성        위험보험료 P^{위험}(= 보장금액 배수 × 순보험료 P) · 계약체결비용 E^{체결} · 적립보험료 P^{적립}
  *   2장 계약자적립액             적용이율 j · 월 적립 계수 s · 계약자적립액 AV
- *   3장 해약환급금 및 만기환급금 해약공제 · 납입누계 · W · 환급률 (1장 다. 보험금: 사망보험금)
+ *   3장 해약환급금 및 만기환급금 해약공제 · 납입누계 · W · 환급률
  * 이 표기도 calc.ts 가 그대로 읽어 계산한다 — 식을 고치면 적립액이 바뀐다.
  * 공시이율의 세 예시(공시이율 · 평균공시이율 · 최저보증이율)는 j^{공시} 값만 바꿔 같은 식으로 낸다(calc.ts SAVINGS_SCENARIOS).
  */
@@ -47,20 +49,30 @@ export const savingsTerm = (spec: MethodSpec, payYears: number) => {
   return ts.includes(payYears) ? payYears : ts[Math.floor((ts.length - 1) / 2)];
 };
 
-/** 적립형 식 — q 는 사망률의 기호(위험률 표의 기호) */
-export function savingsFormulas(spec: MethodSpec, q: string): FormulaSpec[] {
+/** 위험보험료를 내는 보장 — 첫 보장. ponytail: 보장이 여럿이어도 첫 보장만 위험보험료에 든다(보장마다 P 를 따로 세워 더하려면 calc.ts savingsModel 을 보장마다 돌린다) */
+export const savingsBenefit = (spec: MethodSpec): BenefitSpec | undefined => spec.benefits[0];
+/** 기본보험료 1원당 보장금액 — 보험료의 배수면 그 배수, 정액이면 보장금액 ÷ 기본보험료(둘 다 원 — 산출 조건에서) */
+export function perBase(b?: BenefitSpec): string {
+  if (!b) return "0";
+  return b.base === "premium" && b.multiple !== undefined ? num(b.multiple) : "보장금액 / 기본보험료";
+}
+
+/** 적립형이 표준 식에 더하는 식(열쇠 save:*) */
+export function savingsFormulas(spec: MethodSpec): FormulaSpec[] {
   const s = spec.savings!;
-  const dm = num(s.deathMultiple), ay = s.alphaYears, dr = num(s.deductRatio), dy = s.deductYears;
+  const b = savingsBenefit(spec), k = perBase(b);
+  const ay = s.alphaYears, dr = num(s.deductRatio), dy = s.deductYears;
+  const benPath = b ? `benefits[0].multiple|benefits[0].base|benefits[0].amount` : "benefits";
   return [
-    { section: SAVE_BENEFIT, key: "save:death", label: "사망보험금", path: "savings.deathMultiple",
-      text: ["t 년도 말 사망 시 — 기본보험료의 배수에 계약자적립액을 더한다 (기본보험료 1원당)", `사망보험금_t = ${dm} + AV_t`].join("\n") },
-    { section: SAVE_PREMIUM, key: "save:risk", label: "위험보험료", path: "rates|basis.interest|savings.deathMultiple",
-      text: [`기본보험료의 ${pct(s.deathMultiple)} 부분의 매월 위험보험료 — 보장부분 확정이율 i 로 반달 할인`, `P^{위험}_t = ${dm} × ${q}_{x+t} / 12 × ( 1 + i )^{−1/24}`].join("\n"),
-      note: "계약자적립액 부분은 위험보험료가 없다(사망 시 그대로 지급한다)." },
+    { section: SAVE_BENEFIT, key: "save:death", label: "사망보험금 (계약자적립액 포함)", path: `${benPath}|savings`,
+      text: [`t 년도 말 사망 시 — 보장금액(마. 보장)에 계약자적립액을 더한다 (기본보험료 1원당)`, `사망보험금_t = ${k} + AV_t`].join("\n") },
+    { section: SAVE_PREMIUM, key: "save:risk", label: "위험보험료", path: `${benPath}|rates|basis.interest`,
+      text: [b ? `보장(${b.name})의 순보험료 P 는 보장금액 1원당 매월 — 기본보험료 1원당으로 옮긴다` : "보장이 없어 위험보험료가 없다", `P^{위험} = ${b ? `${k} × P` : "0"}`].join("\n"),
+      note: `계약자적립액 부분은 위험보험료가 없다(사망 시 그대로 지급한다).${spec.benefits.length > 1 ? " 보장이 여럿이면 첫 보장만 위험보험료에 넣는다." : ""}` },
     { section: SAVE_PREMIUM, key: "save:alpha", label: "계약체결비용", path: "expenses|savings.alphaYears",
       text: [`계약 후 ${ay}년 이내는 α, 그 뒤는 α′ (기본보험료 대비, 매월)`, `E^{체결}_t = if( t < ${ay}, α, α′ )`].join("\n") },
     { section: SAVE_PREMIUM, key: "save:accum", label: "적립보험료", path: "expenses",
-      text: ["기본보험료에서 계약체결비용 · 계약관리비용 β · 위험보험료를 뺀 것 (매월)", "P^{적립}_t = 1 − E^{체결}_t − β − P^{위험}_t"].join("\n") },
+      text: ["기본보험료에서 계약체결비용 · 계약관리비용 β · 위험보험료를 뺀 것 (매월)", "P^{적립}_t = 1 − E^{체결}_t − β − P^{위험}"].join("\n") },
     { section: SAVE_AV, key: "save:rate", label: "적용이율", path: "savings.credited|basis.averagePublished|savings.guarantee",
       text: ["최저보증이율 — 경과기간에 따라", `j^{보증}_t = ${guaranteeText(s.guarantee)}`,
         "적용이율 — 공시이율이 최저보증이율보다 낮으면 최저보증이율", "j_t = max( j^{공시}, j^{보증}_t )"].join("\n"),

@@ -244,6 +244,8 @@ export function planFromSpec(spec: MethodSpec): { state: PlanState; warnings: st
         steps: b.steps ?? [], points: b.points ?? [],
       };
     });
+    // 보장금액 기준이 보험료의 배수인 보장(Studio 2026-10-10)은 이 앱이 아직 모른다 — 가입금액 × 배수로 넣고 알린다
+    for (const b of spec.benefits) if (u.benefitIds.includes(b.id) && b.base === "premium") warnings.push(`${u.name}: "${b.name}" 은 보장금액이 보험료의 ${b.multiple ?? 0}배입니다 — 자유설계보험은 아직 보험료의 배수를 몰라 가입금액 × 배수로 넣었습니다`);
     if (!coverages.length) warnings.push(`${u.name}: 담보가 없어 기본 담보 하나를 넣었습니다`);
     return { id: fresh("t"), name: u.name, sheet, coverages, overrides: u.main ? {} : conditionsOf(u.overrides ?? {}, age, base) };
   });
