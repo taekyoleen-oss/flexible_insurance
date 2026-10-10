@@ -24,7 +24,7 @@ function assertTerminal(t, name) {
   for (const sx of ["M", "F"]) for (const k of ["q", "f", "qStd", "fStd"]) if (t[sx][k].length !== ages) throw new Error(`${name}: ragged ${sx}.${k}`);
 }
 
-// 암발생률·암입원율은 사용자 제공 자료(docs/rates)에서 scripts/build-cancer-rates.mjs 로 만든다
+// 암발생률·암입원율·뇌출혈·급성심근경색증 표(rates-cancer*.json · rates-ci.json)는 가상 값으로 바꾼 뒤라 다시 만들지 않는다 — 원본 자료와 변환 스크립트는 지웠다(2026-10-10)
 
 // 제7회 경험생명표 — 경영인정기보험 무배당 1504 산출과정표 위험률 시트
 {
