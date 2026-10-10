@@ -106,7 +106,7 @@ export function toExcel(node: Node, c: Ctx): string | null {
 }
 
 /** 담보별 결과 칸의 줄 차례 — 이름 열 + 담보마다 값 열 + 합계 */
-const RESULT_ROWS: { key: string; label: string; fmt: number }[] = [
+const ALL_ROWS: { key: string; label: string; fmt: number }[] = [
   { key: "n", label: "보장기간 n (년)", fmt: 1 }, { key: "m", label: "납입기간 m (년)", fmt: 1 },
   { key: "S_mult", label: "보장금액 배수", fmt: 2 }, { key: "S_amt", label: "보장금액 (원) = 가입금액 × 배수", fmt: 4 }, { key: "α_P", label: "α_P (적용값 — n < 20 이면 × n/20)", fmt: 3 },
   { key: "α^{표준}", label: "α^표준 (표준이율로 같은 식을 계산한 신계약비 — 앱이 계산한 값)", fmt: 3 },
@@ -115,7 +115,7 @@ const RESULT_ROWS: { key: string; label: string; fmt: number }[] = [
   { key: "G₁", label: "G₁ 1원당 보험료 (소수 6자리)", fmt: 3 }, { key: "G_10만", label: "10만원당 보험료 (원)", fmt: 4 }, { key: "prem", label: "담보 보험료 (원) = 10만원당 × 보장금액/10만, 10원 미만 버림", fmt: 4 },
   { key: "P_β", label: "P_β 준비금 산출용 순보험료", fmt: 3 }, { key: "α^{공제}", label: "α^공제 해약공제 기준 신계약비", fmt: 3 },
 ];
-const INPUT_NAME: Record<string, string> = { alphaS: "α_S", alphaP: "α_P", betaS: "β_S", betaG: "β_G", betaPrime: "β′", gamma: "γ", alpha: "α", beta: "β", i_std: "i_std" };
+const INPUT_NAME: Record<string, string> = { alphaS: "α_S", alphaP: "α_P", betaS: "β_S", betaG: "β_G", betaPrime: "β′", gamma: "γ", alpha: "α", beta: "β", i_std: "i_std", alphaPrime: "α′", j_pub: "j^{공시}" };
 
 /**
  * 계약 단위 한 장 — 왼쪽 A·B 에 공통 계약·기초율(값), D 부터 표(위험률·현가율은 공통, 담보마다 구역), 맨 오른쪽에 결과.
@@ -126,6 +126,9 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
   const rows: XCell[][] = [];
   const put = (r: number, col: number, v: XCell) => { (rows[r] ??= [])[col] = v; };
   const maxN = Math.max(...sheets.map((s) => s.n));
+  // 적립형 — 예시마다 구역(공시이율 · 평균공시이율 · 최저보증이율), 결과 칸은 기간만(보험료 줄이 없다)
+  const sav = !!sheets[0].savings;
+  const RESULT_ROWS = sav ? ALL_ROWS.filter((x) => x.key === "n" || x.key === "m") : ALL_ROWS;
 
   // ── 왼쪽: 공통 계약·기초율 (값). 엑셀에서 쓸 이름도 함께 등록한다
   put(0, 0, `계약 · 기초율 — ${unit}`);
@@ -186,11 +189,13 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
   sheets.forEach((s, bi) => {
     const mine: Record<string, number> = { ...col };
     for (const c of s.cols) if (c.kind === "rate") mine[c.sym] = rateCol.get(c.sym === "w" ? "w" : c.label)!;
-    put(TITLE_ROW - 1, next, `담보 ${bi + 1}: ${s.name} (대상자수 ${s.group})`);
+    put(TITLE_ROW - 1, next, sav ? `예시 ${bi + 1}: ${s.name}` : `담보 ${bi + 1}: ${s.name} (대상자수 ${s.group})`);
     for (const c of series[bi]) { mine[c.sym] = next; put(HEAD_ROW - 1, next, `${c.sym} ${c.label}`); next++; }
     next++;                                                                   // 구역 사이 빈 열
     const sym: Record<string, string> = { v: "v_disc", i: "i_rate", k: "k_freq", x: "x_age", ρ: "rho", n: ref(bi, "n"), m: ref(bi, "m"), "α_P": ref(bi, "α_P") };
     for (const it of s.inputs) if (it.name && !it.perBenefit && it.name !== "v_disc") sym[INPUT_NAME[it.name] ?? it.name] = it.name;
+    // 적립형의 공시이율은 예시마다 다르다 — 그 값을 그대로
+    if (sav) sym["j^{공시}"] = String(s.inputs.find((it) => it.name === "j_pub")?.value ?? 0);
     for (const x of RESULT_ROWS) if (!sym[x.key] && !["S_mult", "S_amt", "prem"].includes(x.key)) sym[x.key] = ref(bi, x.key);
     const ctx: Ctx = { col: mine, sym, n: s.n, m: s.m, t: 0 };
     // 표 몸통: 위험률만 값, 나머지는 수식
@@ -231,14 +236,16 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
   RESULT_ROWS.forEach((x, i) => put(DATA_ROW - 1 + i, resultCol, x.label));
   const sumCol = valueCol(sheets.length);
   put(HEAD_ROW - 1, sumCol, "합계");
-  for (const key of ["G_10만", "prem"]) {
+  if (!sav) for (const key of ["G_10만", "prem"]) {
     const rr = rowOf(key) - 1;
     put(rr, sumCol, { f: `SUM(${cellRef(valueCol(0), rowOf(key))}:${cellRef(valueCol(sheets.length - 1), rowOf(key))})`, fmt: 4 });
   }
-  names.push({ name: `per100k_${at0}`, sheet: name, ref: `$${colLetter(sumCol)}$${rowOf("G_10만")}` });
-  names.push({ name: `prem_${at0}`, sheet: name, ref: `$${colLetter(sumCol)}$${rowOf("prem")}` });
+  if (!sav) {
+    names.push({ name: `per100k_${at0}`, sheet: name, ref: `$${colLetter(sumCol)}$${rowOf("G_10만")}` });
+    names.push({ name: `prem_${at0}`, sheet: name, ref: `$${colLetter(sumCol)}$${rowOf("prem")}` });
+  }
   const gap = DATA_ROW - 1 + RESULT_ROWS.length + 1;
-  put(gap, resultCol, "담보 보험료의 합이 이 단위의 보험료입니다. 10만원당 보험료는 담보마다 원 단위로 반올림하고, 담보 보험료는 10원 미만을 버린 뒤 더합니다.");
+  put(gap, resultCol, sav ? "적립형 — 값은 모두 월 기본보험료 1원당입니다(원 = 값 × base_premium). 예시마다 공시이율 j_pub 만 다릅니다." : "담보 보험료의 합이 이 단위의 보험료입니다. 10만원당 보험료는 담보마다 원 단위로 반올림하고, 담보 보험료는 10원 미만을 버린 뒤 더합니다.");
 
   const widths = [30, 16, 3, 7, 8, ...Array.from({ length: next - T_COL - 2 }, () => 13), 44, ...sheets.map(() => 16), 14];
   return { name, rows: rows.map((x) => x ?? []), widths, freeze: { rows: HEAD_ROW, cols: T_COL + 2 } };

@@ -19,6 +19,8 @@ const NAME_MAP: Record<string, string> = {
   "P_β": "P_beta", "W^{표준}": "W_std", "V^{표준}": "V_std", "V^{결산}": "V_acc", "α^{공제}": "alpha_ded", "α^{표준}": "alpha_std", 해약공제: "deduction", 납입누계: "paid", 환급률: "refund_rate", "V^{10만}": "V_100k",
   "α_S": "alpha_S", "α_P": "alpha_P", "β_S": "beta_S", "β_G": "beta_G", "β′": "beta_prime", γ: "gamma", α: "alpha", β: "beta", ρ: "rho",
   "v^t": "vt", "v^{t+½}": "vth",
+  // 적립형
+  "P^{위험}": "P_risk", "E^{체결}": "E_acq", "P^{적립}": "P_save", "j^{보증}": "j_guar", "j^{공시}": "j_pub", "α′": "alpha_p", 사망보험금: "death_benefit",
 };
 export function pyName(sym: string): string {
   if (NAME_MAP[sym]) return NAME_MAP[sym];
@@ -194,6 +196,7 @@ function benefitCells(s: CalcSheet, bi: number): PyCell[] {
 /** 지금 조건·계약의 계산을 파이썬 셀로. 첫 셀이 공통 입력과 위험률 표, 마지막 셀이 합계 */
 export function calcPython(spec: MethodSpec, contract: CalcContract): PyCell[] {
   const calc = calcSheets(spec, contract);
+  if (spec.savings) return savingsPython(spec, contract, calc.sheets);
   const units = sheetsByUnit(calc);
   const first = calc.sheets[0];
   const sex = contract.sex === "F" ? "F" : "M";
@@ -242,6 +245,54 @@ export function calcPython(spec: MethodSpec, contract: CalcContract): PyCell[] {
     `import json; print("RESULT", json.dumps(results, ensure_ascii=False))   # 기계가 읽는 줄 — 앱의 값과 맞대어 본다`,
     ...(units.length > 1 ? [`# 주계약과 특약을 더한 것이 이 계약의 보험료다`] : []),
   ].join("\n") });
+  return cells;
+}
+
+/**
+ * 적립형 — 공시이율 예시마다 한 셀: 보험료의 구성 → 적용이율 → 계약자적립액 → 환급금. 마지막 줄 RESULT 에 해마다 W(원)를 찍는다(앱과 맞대어 본다)
+ */
+function savingsPython(spec: MethodSpec, contract: CalcContract, sheets: CalcSheet[]): PyCell[] {
+  const first = sheets[0];
+  const input = (name: string) => first?.inputs.find((x) => x.name === name)?.value;
+  const sex = contract.sex === "F" ? "F" : "M";
+  const tables = spec.rates.map((r) => {
+    const t = rateTable(r, sex);
+    return `    ${q(r.name)}: {${t ? t.ages.map((a, i) => `${a}: ${t.values[i]}`).join(", ") : ""}},   # ${r.source ?? ""}`;
+  });
+  const cells: PyCell[] = [{ title: "계약·기초율", code: [
+    `# ${spec.meta.productName || "상품"} — 적립형(공시이율형). 산출방법서의 식을 그대로 파이썬으로 옮긴 일괄 산출`,
+    `# 값은 모두 월 기본보험료 1원당이다 — 원 단위는 맨 뒤에 기본보험료 G 를 곱한다.`,
+    `import math`,
+    `def div(a, b):  # 0 으로 나누면 0 (산출방법서 계산기와 같다 — 환급률의 납입누계_0 = 0)`,
+    `    return 0 if b == 0 else a / b`,
+    ``,
+    `x = ${contract.age}            # 가입나이`,
+    `sex = ${q(sex === "F" ? "여" : "남")}`,
+    `G = ${input("base_premium") ?? 300000}   # 월 기본보험료(원)`,
+    `n = ${first?.n ?? 10}            # 보험기간(년) — 전기납 월납`,
+    `i = ${input("i_rate") ?? 0}        # 보장부분 확정이율 — 위험보험료 할인`,
+    `alpha = ${input("alpha") ?? 0}   # α 계약체결비용 (기본보험료 대비, 매월)`,
+    `alpha_p = ${input("alphaPrime") ?? 0}   # α′ 계약체결비용 (그 뒤)`,
+    `beta = ${input("beta") ?? 0}   # β 계약관리비용`,
+    `rates = {`, ...tables, `}`,
+    `results = {}`,
+  ].join("\n") }];
+  for (const s of sheets) {
+    if (s.error) continue;
+    const c: Ctx = { series: new Set(s.cols.map((x) => x.sym)), scalars: new Set(), known: new Set() };
+    const rates = s.cols.filter((x) => x.kind === "rate");
+    cells.push({ title: s.name, code: [
+      `# ── ${s.name} — 공시이율 j^{공시} 만 바꿔 같은 식으로 ──`,
+      `j_pub = ${s.inputs.find((x) => x.name === "j_pub")?.value ?? 0}`,
+      ...rates.map((r) => `${pyName(r.sym)} = [rates[${q(r.label)}].get(x + t, 0.0) for t in range(n + 1)]   # ${r.sym}: ${r.label}`),
+      "",
+      ...inOrder(s.cols.filter((x) => x.kind === "series")).flatMap((col) => [...seriesLines(col, c), ""]),
+      `results[${q(s.id)}] = [round(W[t] * G) for t in range(n + 1)]`,
+      `print(${q(s.name)}, "— t, 납입누계, 계약자적립액, 환급금, 환급률")`,
+      `for t in range(1, n + 1): print(t, round(paid[t] * G), round(AV[t] * G), round(W[t] * G), f"{refund_rate[t]:.1%}")`,
+    ].join("\n") });
+  }
+  cells.push({ title: "합계", code: [`import json; print("RESULT", json.dumps(results, ensure_ascii=False))   # 기계가 읽는 줄 — 앱의 값과 맞대어 본다`].join("\n") });
   return cells;
 }
 

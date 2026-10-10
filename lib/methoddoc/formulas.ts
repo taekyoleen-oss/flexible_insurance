@@ -1,4 +1,5 @@
 import { coverTerms, unitNames, unitOf, waiverRates, WHOLE_LIFE_AGE, type BenefitSpec, type ComboSpec, type FormulaSpec, type MethodSpec, type RateRef, type SurvivorSpec } from "./spec";
+import { savingsFormulas } from "./savings";
 
 /**
  * 조건(MethodSpec) → 산출식. 앱 엔진 없이 조건만으로 산출방법서의 3장 이후를 만든다.
@@ -520,6 +521,11 @@ export const BENEFIT_FIELDS = ["name", "unit", "role", "endAge", "multiple", "am
 
 // ── 산출방법서에 실을 식 ─────────────────────────────────────────────────────
 export function generateFormulas(spec: MethodSpec): FormulaSpec[] {
+  // 적립형(공시이율형 저축보험) — 유지자·보험금·보험료 대신 보험료의 구성 · 계약자적립액 · 환급금 식
+  if (spec.savings) {
+    const death = spec.rates.find((r) => r.role === "death");
+    return savingsFormulas(spec, (death && rateSymbols(spec).get(death.id)) || "q");
+  }
   const out: FormulaSpec[] = [];
   const lapse = (spec.basis.lapse ?? []).some((l) => l.rate > 0);
   const low = lapse && spec.basis.lowRatio !== undefined;

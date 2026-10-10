@@ -283,6 +283,30 @@ export const waiverRates = (spec: MethodSpec): RateRef[] =>
 export const hasProduct = (p?: ProductInfo): p is ProductInfo =>
   !!p && !!(p.category || p.types?.length || p.terms?.length || p.payFreqs?.length || p.sumLimit || p.renewal);
 
+/**
+ * 공시이율형 적립 저축보험(적립형) — 있으면 보장성 식(유지자·보험금·보험료) 대신 적립형 식을 쓴다(savings.ts).
+ * 보험료는 계약자가 정한 **월 기본보험료**이고, 식과 값은 모두 기본보험료 1원당이다(맨 뒤에 기본보험료를 곱한다).
+ * 보장부분 확정이율은 basis.interest, 평균공시이율은 basis.averagePublished 에 둔다. 사업비는 expenses 의 α · α′ · β(기본보험료 대비).
+ */
+export interface SavingsSpec {
+  /** 공시이율(예시) — 매월 회사가 정한다 */
+  credited: number;
+  /** 최저보증이율 — 경과 from 년부터 rate (from 오름차순, 첫 줄 from 0) */
+  guarantee: { from: number; rate: number }[];
+  /** 사망보험금 = 기본보험료 × deathMultiple + 계약자적립액 (500% → 5) */
+  deathMultiple: number;
+  /** 만기환급금 최저보증 — 납입보험료 × maturityFloor (100.1% → 1.001) */
+  maturityFloor: number;
+  /** 계약체결비용 α 를 쓰는 기간(년). 그 뒤는 α′ */
+  alphaYears: number;
+  /** 해약공제 = 기본보험료 × deductRatio × max(0, deductYears − t)/deductYears */
+  deductRatio: number;
+  deductYears: number;
+}
+
+/** 적립형인지 */
+export const isSavings = (spec: MethodSpec): spec is MethodSpec & { savings: SavingsSpec } => !!spec.savings;
+
 export interface ExtraSection {
   /** "1. 보험료의 계산에 관한 사항" 같은 원문 제목 */
   title: string;
@@ -307,6 +331,8 @@ export interface MethodSpec {
   /** 위험률 합성 — 없으면 유지자·보험금이 쓰는 위험률 묶음에서 만든다 */
   combos?: ComboSpec[];
   units: UnitSpec[];
+  /** 적립형(공시이율형 저축보험) — 있으면 보장성 식 대신 적립형 식 */
+  savings?: SavingsSpec;
   reserve: { notes: string[] };
   surrender: { deductionYears?: number; notes: string[] };
   formulas: FormulaSpec[];

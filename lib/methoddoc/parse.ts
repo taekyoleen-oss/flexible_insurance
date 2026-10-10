@@ -315,6 +315,9 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
     }
   }
 
+  // 3-2) 적립형(공시이율형 저축보험) — "적립 조건 | 값" 표와 예정이율 표의 공시이율·최저보증이율 행. 식 비교(readStandard) 전에 읽는다(자동 식이 이 값으로 만들어진다)
+  if (standard) readSavings(doc, spec, evidence);
+
   // 4) 원문 절 보존 — 모델에 자리가 없는 내용을 잃지 않게. 표준 양식은 정해진 순서대로 수식·주석·절을 읽는다
   if (standard) {
     for (const [k, path] of [["회사", "meta.insurer"], ["판", "meta.version"], ["비고", "meta.note"], ["작성일", "meta.date"]] as const) {
@@ -590,7 +593,7 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
       rider = !!riderHead;
       title = top[1].trim();
       kind = /^(기초율에 관한 사항|계약 단위와 급부|기호의 정의|보험료의 계산에 관한 사항)$|^별첨/.test(title) ? "known"
-        : /^책임준비금.*사항$/.test(title) ? "reserve" : /^해지환급금.*사항$/.test(title) ? "surrender" : "other";
+        : /^(책임준비금|계약자적립액).*사항$/.test(title) ? "reserve" : /^(해지환급금|해약환급금).*사항$/.test(title) ? "surrender" : "other";
       extra = kind === "other" ? { title, paragraphs: [] } : null;
       if (extra) extras.push(extra);
       continue;
@@ -680,6 +683,32 @@ function readStandard(paragraphs: string[], spec: MethodSpec, evidence: Evidence
   push("reserve", "책임준비금 관련 사항", `${reserve.length}줄`);
   push("surrender", "해지환급금 관련 사항", `${surrender.length}줄${spec.surrender.deductionYears ? ` · 해약공제 ${spec.surrender.deductionYears}년` : ""}`);
   push("sections", "원문 절", `${spec.sections.length}개`);
+}
+
+/**
+ * 적립형 — 이 앱이 낸 적립형 산출방법서의 "적립 조건 | 값" 표(사망보험금 배수 · 만기 최저보증 · α 기간 · 해약공제)와
+ * 예정이율 표의 "공시이율 (예시 …)" · "최저보증이율 — 경과 …" 행. 적립 조건 표가 없으면 적립형이 아니다.
+ * 최저보증이율 행은 본문 규칙이 basis.minGuaranteed 로도 줍는다 — 적립형은 구간별로 savings 에 두므로 그것은 지운다.
+ */
+function readSavings(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]) {
+  const rows = doc.tables.flatMap((t) => [t.head, ...t.rows]).map((r) => r.map((c) => squeeze(c).replace(/\s+/g, " ").trim()));
+  if (!doc.tables.some((t) => squeeze(t.head[0] ?? "").replace(/\s/g, "") === "적립조건")) return;
+  const val = (re: RegExp) => { const r = rows.find((x) => re.test(x[0] ?? "")); return r?.[1]; };
+  const rate = (re: RegExp, d: number) => { const v = val(re); const x = v !== undefined ? parseRate(v) : null; return x ?? d; };
+  const years = (re: RegExp, d: number) => { const m = /(\d+)\s*년/.exec(val(re) ?? ""); return m ? Number(m[1]) : d; };
+  const guarantee = rows.filter((x) => /^최저\s*보증\s*이율\s*—\s*경과/.test(x[0] ?? "")).map((x) => {
+    const m = /경과\s*(\d+)\s*년\s*(이상|미만)/.exec(x[0]);
+    return { from: m && m[2] === "이상" ? Number(m[1]) : 0, rate: parseRate(x[1] ?? "") ?? 0 };
+  });
+  spec.savings = {
+    credited: rate(/^공시\s*이율/, 0), guarantee,
+    deathMultiple: rate(/^사망보험금/, 0), maturityFloor: rate(/^만기환급금\s*최저보증/, 1),
+    alphaYears: years(/^계약체결비용.*기간/, 7), deductRatio: rate(/^해약공제\s*—/, 0), deductYears: years(/^해약공제\s*기간/, 7),
+  };
+  evidence.push({ path: "savings", label: "적립 조건", value: `공시이율 ${spec.savings.credited} · 최저보증 ${guarantee.length}구간`, raw: "적립 조건 표", source: "표준 양식", confidence: "high" });
+  delete spec.basis.minGuaranteed;
+  const i = evidence.findIndex((e) => e.path === "basis.minGuaranteed");
+  if (i >= 0) evidence.splice(i, 1);
 }
 
 /**

@@ -3,7 +3,7 @@ export type Sex = "M" | "F";
 /** 연령 인덱스 배열(index = 나이). */
 export interface RateSet { q: number[]; f: number[]; qStd: number[]; fStd: number[] }
 export interface RateTable {
-  meta: { name: string; source?: string; ages: [number, number]; terminal: Record<Sex, number> };
+  meta: { name: string; source?: string; ages: [number, number]; terminal: Record<Sex, number>; /** 가상 값으로 바꾼 표시(scripts/perturb-rates.mjs) */ perturbed?: string };
   M: RateSet;
   F: RateSet;
 }
