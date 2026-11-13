@@ -83,7 +83,9 @@ const displayMath = (s: string) => `<m:oMathPara><m:oMathParaPr><m:jc m:val="lef
  * 글 속의 기호 — α_S · l′_{x+t} · W^{표준} · q^{(1)}_x.
  * 글 속에서는 한글 첨자를 {…} 로 묶을 때만 첨자로 본다 — "α_P는" 의 "는" 이 첨자로 딸려 가지 않게.
  */
-const TOKEN = /[A-Za-zα-ωΑ-ΩĀ][′']?(?:[_^](?:\{[^{}]*\}|[A-Za-z0-9]+|[α-ω]))+/g;
+// 본체는 영문자로 시작하는 영문·숫자까지(위험률 기호 r80 · rc — M04 의 id)
+const BASE = /^[A-Za-zα-ωΑ-ΩĀ][A-Za-z0-9]*[′']?/;
+const TOKEN = /[A-Za-zα-ωΑ-ΩĀ][A-Za-z0-9]*[′']?(?:[_^](?:\{[^{}]*\}|[A-Za-z0-9]+|[α-ω]))+/g;
 const SCRIPT = /([_^])(\{[^{}]*\}|[A-Za-z0-9]+|[α-ω])/g;
 /** 글 속의 기호를 본체 · 아래첨자(sub) · 위첨자(sup) 토막으로 — Word(richRuns)와 한글(hwpx.ts)이 같은 토막을 쓴다 */
 export function richParts(text: string): { t: string; v?: "sub" | "sup" }[] {
@@ -91,7 +93,7 @@ export function richParts(text: string): { t: string; v?: "sub" | "sup" }[] {
   let at = 0;
   for (const m of text.matchAll(TOKEN)) {
     if (m.index! > at) out.push({ t: text.slice(at, m.index) });
-    const base = /^[A-Za-zα-ωΑ-ΩĀ][′']?/.exec(m[0])![0];
+    const base = BASE.exec(m[0])![0];
     out.push({ t: base });
     for (const s of m[0].slice(base.length).matchAll(SCRIPT)) out.push({ t: s[2].startsWith("{") ? s[2].slice(1, -1) : s[2], v: s[1] === "_" ? "sub" : "sup" });
     at = m.index! + m[0].length;
