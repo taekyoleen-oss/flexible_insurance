@@ -67,7 +67,9 @@ export async function unzip(buf: Uint8Array): Promise<Map<string, Uint8Array>> {
 }
 
 // ── XML ──────────────────────────────────────────────────────────────────────
-const strip = (s: string) => s.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
+/** 태그를 지우고 문자 참조를 되돌린다 — 빈칸은 그대로 */
+const untag = (s: string) => s.replace(/<[^>]*>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&");
+const strip = (s: string) => untag(s).replace(/\s+/g, " ").trim();
 const tagsOf = (xml: string, tag: string): string[] => {
   const out: string[] = [];
   const re = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, "g");
@@ -104,17 +106,20 @@ export function wordMath(xml: string): string {
  * ("{{l}} _  {{x}{+}{t}{+}{1}} {~=~} {"해약공제"} …" — 글자마다 묶음, 한글은 따옴표)도 읽는다.
  */
 const HWP_EQ: [RegExp, string][] = [
-  [/"([^"]*)"/g, "$1"],
-  [/\{((?:[^{}]|\{[^{}]*\})*)\}\s*over\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g, "($1)/($2)"], [/\b(LEFT|RIGHT|rm|it|bold)\b\s*/g, ""], [/[`~]/g, " "],
+  [/\{((?:[^{}]|\{[^{}]*\})*)\}\s*over\s*\{((?:[^{}]|\{[^{}]*\})*)\}/gi, "($1)/($2)"], [/\b(LEFT|RIGHT|left|right|rm|it|bold)\b\s*/g, ""], [/[`~]/g, " "],
   [/\bTIMES\b/gi, "×"], [/\bCDOT\b/gi, "·"], [/\bSUM\b/gi, "Σ"], [/\bprime\b/gi, "′"], [/>=|\bgeq?\b/gi, "≥"], [/<=|\bleq?\b/gi, "≤"],
   [/\balpha\b/g, "α"], [/\bbeta\b/g, "β"], [/\bgamma\b/g, "γ"], [/\bdelta\b/g, "δ"], [/\btheta\b/g, "θ"], [/\bomega\b/g, "ω"],
-  [/\s+([_^′])/g, "$1"],
+  [/\bepsilon\b/g, "ε"], [/\blambda\b/g, "λ"], [/\bmu\b/g, "μ"], [/\bpi\b/g, "π"], [/\brho\b/g, "ρ"], [/\bsigma\b/g, "σ"], [/\btau\b/g, "τ"], [/\bphi\b/g, "φ"],
+  [/\s+([_^′])/g, "$1"], [/([_^])\s+/g, "$1"],
 ];
 export function hwpEquation(script: string): string {
-  let s = HWP_EQ.reduce((t, [re, to]) => t.replace(re, to), script);
+  // 따옴표 안("해약공제" · "base" · "sum")은 글자 그대로다 — 수식 낱말(sum → Σ · it · LEFT)로 바꾸지 않게 잠깐 빼 둔다
+  const quoted: string[] = [];
+  let s = script.replace(/"([^"]*)"/g, (_, q: string) => `\u0001${quoted.push(q) - 1}\u0002`);
+  s = HWP_EQ.reduce((t, [re, to]) => t.replace(re, to), s);
   // 첨자 자리(_ ^ 바로 뒤)가 아닌 묶음은 벗긴다 — 안쪽부터, 더 벗길 게 없을 때까지
   for (let prev = ""; prev !== s;) { prev = s; s = s.replace(/(^|[^_^])\{([^{}]*)\}/g, "$1$2"); }
-  return s.replace(/\s+/g, " ").trim();
+  return s.replace(/\u0001(\d+)\u0002/g, (_, i: string) => quoted[Number(i)]).replace(/\s+/g, " ").trim();
 }
 
 /** 수식에서 되돌린 표기의 한 토막 묶음은 중괄호를 뗀다 — α_{S} → α_S, v^{t} → v^t (이 모듈의 평문 표기와 같게) */
@@ -140,7 +145,8 @@ function hwpText(xml: string, cs: { sub: Set<string>; sup: Set<string> }): strin
     const id = /charPrIDRef="(\d+)"/.exec(r[1])?.[1] ?? "";
     const mark = cs.sub.has(id) ? ["_\u0005", "\u0006"] : cs.sup.has(id) ? ["^\u0005", "\u0007"] : ["", ""];
     for (const m of (r[2] ?? "").matchAll(/<hp:t(?:\s[^>]*)?>([\s\S]*?)<\/hp:t>|<hp:script(?:\s[^>]*)?>([\s\S]*?)<\/hp:script>/g)) {
-      if (m[1] !== undefined) { const t = strip(m[1]); if (t) out += mark[0] + t + mark[1]; }
+      // 런 사이의 빈칸은 그대로 둔다("q" + 아래첨자 "x" + " : 사망률" → "q_x : 사망률" — Word 로 읽은 것과 같게). 탭·줄 나눔은 빈칸
+      if (m[1] !== undefined) { const t = untag(m[1].replace(/<hp:(tab|lineBreak|fwSpace|nbSpace)\b[^>]*>/g, " ")); out += t.trim() ? mark[0] + t + mark[1] : t; }
       else out += ` ${hwpEquation(strip(m[2]))} `;
     }
   }

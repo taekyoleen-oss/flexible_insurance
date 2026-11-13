@@ -354,6 +354,8 @@ export function parseMethodDoc(input: ExtractedDoc, opt: ParseOptions = {}): Par
   if (!spec.expenses.length) missing.push("사업비");
   if (!spec.rates.length) missing.push("위험률");
 
+  for (const e of evidence) if (e.source === UNREAD) warnings.push(`${e.label} 칸의 "${e.raw}" 을(를) 읽지 못했습니다 — 수로 적어 주세요(예: 0.5 · 90일 · 1.5/1000). 지우려면 칸을 "—" 로 둡니다`);
+
   // 생존자가 담보의 탈퇴 위험률·납입면제에서 그대로 만들어지는 것이면 적지 않는다 — 옛 조건과 같은 모양으로 남게
   const out = compactCombos(compactSurvivors(spec));
   return { spec: out, evidence, missing, warnings: [...new Set([...warnings, ...validateSpec(out)])], ...(standard ? { format } : {}) };
@@ -480,12 +482,17 @@ function readV8(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[], warni
     const bs: BenefitSpec = { id: `b${spec.benefits.length + 1}`, name, role, ...(unit && unit !== "주계약" ? { unit } : {}),
       ...(sv ? { survivorId: sv.id, ...(sv.exitRateIds.length ? { exitRateIds: [...sv.exitRateIds] } : {}) } : {}) };
     if (/보험료/.test(get("보장금액기준"))) bs.base = "premium";
+    // 칸에 글은 있는데 수로 못 읽으면("반" · "3개월") 지운 것으로 치지 않는다 — 읽지 못한 칸으로 남겨 알린다(반영할 때는 지금 조건 값을 둔다)
+    const blank = (s: string) => !s || /^(—|-|없음)$/.test(s);
+    const unread = (k: string, label: string, text: string) => evidence.push({ path: `benefits[${spec.benefits.length}].${k}`, label: `보장 "${name}" 의 ${label}`, value: text, raw: text, source: UNREAD, confidence: "low" });
     const mult = get("보장금액배수");
-    if (/원/.test(mult)) { const a = numIn(mult); if (a !== null) bs.amount = a; }
-    else if (mult && mult !== "—") { const v = Number(mult.replace(/배$/, "")); if (Number.isFinite(v)) bs.multiple = v; }
+    if (/원/.test(mult)) { const a = numIn(mult); if (a !== null) bs.amount = a; else unread("multiple", "보장금액 배수", mult); }
+    else if (!blank(mult)) { const v = Number(mult.replace(/배$/, "")); if (Number.isFinite(v)) bs.multiple = v; else unread("multiple", "보장금액 배수", mult); }
     const end = /(\d+)\s*세/.exec(get("보험기간"));
     if (end) bs.endAge = Number(end[1]);
     const ratio = /([\d.]+)\s*%/.exec(get("삭감시"));
+    for (const [k, label] of [["면책", "면책"], ["삭감기간", "삭감기간"]]) if (!blank(get(k)) && days(get(k)) === undefined) unread("waitDays", label, get(k));
+    if (!blank(get("삭감시")) && !ratio) unread("waitDays", "삭감 시 지급률", get("삭감시"));
     Object.assign(bs, Object.fromEntries(Object.entries(coverFields({ wait: days(get("면책")), reduce: days(get("삭감기간")), ratio: ratio ? Number(ratio[1]) / 100 : undefined })).filter(([, v]) => v !== undefined)));
     // 급부 위험률 — 유지자의 탈퇴 사유에서 정해지는 것과 다를 때만 따로 적는다(일당형 · 암수술 등)
     if (pickCombo) bs.rateId = pickCombo;
@@ -551,6 +558,12 @@ function readSurvivorTables(doc: ExtractedDoc, spec: MethodSpec, evidence: Evide
   });
   if (out.length) spec.survivors = out.sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
 }
+
+/**
+ * 근거(Evidence)의 source — 칸에 글은 있는데 값으로 읽지 못한 것(confidence "low", path 는 그 칸: `benefits[i].multiple` · `benefits[i].waitDays` · `expenses.<기호>` · `savings.<칸>`).
+ * 되읽기는 경고로 알리고, 반영(mergeSpec)은 그 칸의 지금 조건 값을 둔다 — 오타가 "지움" 으로 들어가지 않게.
+ */
+export const UNREAD = "읽지 못한 칸";
 
 type Add = (path: string, label: string, value: string | number | boolean, raw: string, source: string, confidence: Confidence, setValue?: boolean) => void;
 
@@ -696,16 +709,20 @@ function readSavings(doc: ExtractedDoc, spec: MethodSpec, evidence: Evidence[]) 
   const rows = doc.tables.flatMap((t) => [t.head, ...t.rows]).map((r) => r.map((c) => squeeze(c).replace(/\s+/g, " ").trim()));
   if (!doc.tables.some((t) => squeeze(t.head[0] ?? "").replace(/\s/g, "") === "적립조건")) return;
   const val = (re: RegExp) => { const r = rows.find((x) => re.test(x[0] ?? "")); return r?.[1]; };
-  const rate = (re: RegExp, d: number) => { const v = val(re); const x = v !== undefined ? parseRate(v) : null; return x ?? d; };
-  const years = (re: RegExp, d: number) => { const m = /(\d+)\s*년/.exec(val(re) ?? ""); return m ? Number(m[1]) : d; };
+  // 칸에 글은 있는데 못 읽으면 기본값으로 조용히 바꾸지 않는다 — 읽지 못한 칸으로 남긴다
+  const unread = (k: string, label: string, text?: string) => { if (text && text !== "—") evidence.push({ path: `savings.${k}`, label: `적립 조건의 ${label}`, value: text, raw: text, source: UNREAD, confidence: "low" }); };
+  const rate = (k: string, re: RegExp, d: number) => { const v = val(re); const x = v !== undefined ? parseRate(v) : null; if (x === null) unread(k, v === undefined ? "" : squeeze(rows.find((r) => re.test(r[0] ?? ""))![0]), v); return x ?? d; };
+  const years = (k: string, re: RegExp, d: number) => { const m = /(\d+)\s*년/.exec(val(re) ?? ""); if (!m) unread(k, squeeze(rows.find((r) => re.test(r[0] ?? ""))?.[0] ?? ""), val(re)); return m ? Number(m[1]) : d; };
   const guarantee = rows.filter((x) => /^최저\s*보증\s*이율\s*—\s*경과/.test(x[0] ?? "")).map((x) => {
     const m = /경과\s*(\d+)\s*년\s*(이상|미만)/.exec(x[0]);
-    return { from: m && m[2] === "이상" ? Number(m[1]) : 0, rate: parseRate(x[1] ?? "") ?? 0 };
+    const v = parseRate(x[1] ?? "");
+    if (v === null) unread("guarantee", x[0], x[1]);
+    return { from: m && m[2] === "이상" ? Number(m[1]) : 0, rate: v ?? 0 };
   });
   spec.savings = {
-    credited: rate(/^공시\s*이율/, 0), guarantee,
-    maturityFloor: rate(/^만기환급금\s*최저보증/, 1),
-    alphaYears: years(/^계약체결비용.*기간/, 7), deductRatio: rate(/^해약공제\s*—/, 0), deductYears: years(/^해약공제\s*기간/, 7),
+    credited: rate("credited", /^공시\s*이율/, 0), guarantee,
+    maturityFloor: rate("maturityFloor", /^만기환급금\s*최저보증/, 1),
+    alphaYears: years("alphaYears", /^계약체결비용.*기간/, 7), deductRatio: rate("deductRatio", /^해약공제\s*—/, 0), deductYears: years("deductYears", /^해약공제\s*기간/, 7),
   };
   evidence.push({ path: "savings", label: "적립 조건", value: `공시이율 ${spec.savings!.credited} · 최저보증 ${guarantee.length}구간`, raw: "적립 조건 표", source: "표준 양식", confidence: "high" });
   delete spec.basis.minGuaranteed;
@@ -867,7 +884,12 @@ function readExpenseTable(t: DocTable, ti: number, spec: MethodSpec, add: Add) {
     const last = cells[cells.length - 1];
     const picked = pickRate(last) ?? pickRate(joined);
     const times = parseTimes(last);
-    if (!picked && times === null) continue;
+    if (!picked && times === null) {
+      // 표준 양식의 사업비 표 — 값 칸에 글은 있는데 못 읽었으면 읽지 못한 칸으로 남긴다(행을 지운 것과 가린다)
+      const [g, sym, , val] = row.map((c) => c.replace(/\s+/g, " ").trim());
+      if (exact && row !== t.head && val && val !== "—") add(`expenses.${sym && sym !== "—" ? sym : g}`, `사업비 ${sym && sym !== "—" ? sym : g} 의 적용사업비율`, val, val, UNREAD, "low", false);
+      continue;
+    }
     const rate = picked?.value ?? null, raw = picked?.raw ?? last;
     // 기준은 앞 칸에서 찾고, 없으면 값이 들어 있던 문장에서 숫자를 뺀 부분을 쓴다
     const tidy = (x: string) => x.replace(/\s+/g, " ").replace(/^[가-힣]\s*[).]\s*/, "").trim().slice(0, 40);

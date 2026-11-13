@@ -1,4 +1,4 @@
-import { calcSheets, evalIndex, roundDigits, sheetsByUnit, type CalcContract, type CalcSheet, type Node } from "./calc";
+import { calcSheets, evalIndex, roundDigits, sheetsByUnit, type CalcContract, type CalcSheet, type CalcSheets, type Node } from "./calc";
 import type { MethodSpec } from "./spec";
 import { cellRef, colLetter, sheetName, writeXlsx, type XCell, type XName, type XSheet } from "./xlsx";
 
@@ -235,7 +235,7 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
   });
 
   // ── 결과 칸 — 이름 열과 합계
-  put(TITLE_ROW - 1, resultCol, "보험료 계산 · 결과 (담보마다)");
+  put(TITLE_ROW - 1, resultCol, RESULT_TITLE);
   RESULT_ROWS.forEach((x, i) => put(DATA_ROW - 1 + i, resultCol, x.label));
   const sumCol = valueCol(sheets.length);
   put(HEAD_ROW - 1, sumCol, "합계");
@@ -252,6 +252,48 @@ function unitSheet(unit: string, sheets: CalcSheet[], at0: number, names: XName[
 
   const widths = [30, 16, 3, 7, 8, ...Array.from({ length: next - T_COL - 2 }, () => 13), 44, ...sheets.map(() => 16), 14];
   return { name, rows: rows.map((x) => x ?? []), widths, freeze: { rows: HEAD_ROW, cols: T_COL + 2 } };
+}
+
+const RESULT_TITLE = "보험료 계산 · 결과 (담보마다)";
+
+/**
+ * 엑셀에서 열어 저장한 보험료 계산 파일의 **계산값**을 읽는다 — 앱 · 파이썬과 맞대어 보려고(산출 흐름 창의 비교 표).
+ * book = 장마다의 줄(칸은 글자 — 빈 줄은 빠져 있어도 된다, 열 자리는 그대로여야 한다). calc = 그 파일을 만든 계산.
+ * 열쇠는 `<보장 id>.<기호>`(N* · PVB · P · G₁ · G_10만 · prem …) · `합계.prem` · 적립형은 `<예시 id>.만기환급금`.
+ * 앱이 방금 만든 파일에는 수식만 있고 계산값이 없다 — 그때 empty(엑셀에서 한 번 열어 저장해야 값이 생긴다).
+ */
+export function workbookResults(calc: CalcSheets, book: string[][][]): { values: Record<string, number>; empty: boolean; problems: string[] } {
+  const out = { values: {} as Record<string, number>, empty: false, problems: [] as string[] };
+  const units = sheetsByUnit(calc).map((u) => ({ ...u, sheets: u.sheets.filter((s) => !s.error) })).filter((u) => u.sheets.length);
+  const num = (s: string | undefined) => (s === undefined || s.trim() === "" ? undefined : Number(s));
+  let total: number | undefined;
+  units.forEach((u, ui) => {
+    const rows = book[ui];
+    const rc = rows?.[0]?.indexOf(RESULT_TITLE) ?? -1;
+    if (!rows || rc < 0) { out.problems.push(`${u.unit}: 결과 칸을 찾지 못했습니다 — 이 창에서 내려받은 보험료 계산 파일이 맞는지 확인하세요`); return; }
+    const sav = !!u.sheets[0].savings;
+    // 적립형의 만기환급금 — 예시 구역마다 W 열의 만기(t = n) 값 × 기본보험료
+    const wCols = (rows[HEAD_ROW - 1] ?? []).map((h, i) => (h?.startsWith("W ") ? i : -1)).filter((i) => i >= 0);
+    u.sheets.forEach((s, bi) => {
+      const vc = rc + 1 + bi;
+      if ((rows[HEAD_ROW - 1]?.[vc] ?? "") !== s.name) { out.problems.push(`${u.unit} · ${s.name}: 파일의 보장 이름이 다릅니다 — 지금 조건으로 다시 내려받은 파일을 올리세요`); return; }
+      for (const row of rows) {
+        const key = ALL_ROWS.find((x) => x.label === row[rc])?.key;
+        if (!key) continue;
+        const v = num(row[vc]);
+        if (v === undefined) { if (key === "N*") out.empty = true; continue; }
+        if (Number.isFinite(v)) out.values[`${s.id}.${key}`] = v;
+      }
+      const w = sav ? num(rows[DATA_ROW - 1 + s.n]?.[wCols[bi]]) : undefined;
+      if (w !== undefined && Number.isFinite(w)) out.values[`${s.id}.만기환급금`] = Math.round(w * calc.premium);
+    });
+    if (!sav) {
+      const sum = num(rows.find((row) => row[rc] === ALL_ROWS.find((x) => x.key === "prem")!.label)?.[rc + 1 + u.sheets.length]);
+      if (sum !== undefined && Number.isFinite(sum)) total = (total ?? 0) + sum;
+    }
+  });
+  if (total !== undefined) out.values["합계.prem"] = total;
+  return out;
 }
 
 /**

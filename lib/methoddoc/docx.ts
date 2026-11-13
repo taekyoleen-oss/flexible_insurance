@@ -85,36 +85,35 @@ const displayMath = (s: string) => `<m:oMathPara><m:oMathParaPr><m:jc m:val="lef
  */
 const TOKEN = /[A-Za-zα-ωΑ-ΩĀ][′']?(?:[_^](?:\{[^{}]*\}|[A-Za-z0-9]+|[α-ω]))+/g;
 const SCRIPT = /([_^])(\{[^{}]*\}|[A-Za-z0-9]+|[α-ω])/g;
-/** 기호 하나 → 글자 서식 첨자 런들 (본체 · 아래첨자 · 위첨자) */
-function tokenRuns(tok: string, rPr: string): string {
-  const base = /^[A-Za-zα-ωΑ-ΩĀ][′']?/.exec(tok)![0];
-  let out = run(base, rPr);
-  for (const m of tok.slice(base.length).matchAll(SCRIPT)) {
-    const t = m[2].startsWith("{") ? m[2].slice(1, -1) : m[2];
-    out += run(t, `${rPr}<w:vertAlign w:val="${m[1] === "_" ? "subscript" : "superscript"}"/>`);
+/** 글 속의 기호를 본체 · 아래첨자(sub) · 위첨자(sup) 토막으로 — Word(richRuns)와 한글(hwpx.ts)이 같은 토막을 쓴다 */
+export function richParts(text: string): { t: string; v?: "sub" | "sup" }[] {
+  const out: { t: string; v?: "sub" | "sup" }[] = [];
+  let at = 0;
+  for (const m of text.matchAll(TOKEN)) {
+    if (m.index! > at) out.push({ t: text.slice(at, m.index) });
+    const base = /^[A-Za-zα-ωΑ-ΩĀ][′']?/.exec(m[0])![0];
+    out.push({ t: base });
+    for (const s of m[0].slice(base.length).matchAll(SCRIPT)) out.push({ t: s[2].startsWith("{") ? s[2].slice(1, -1) : s[2], v: s[1] === "_" ? "sub" : "sup" });
+    at = m.index! + m[0].length;
   }
+  if (at < text.length) out.push({ t: text.slice(at) });
   return out;
 }
 /** 글 속의 기호만 첨자 서식으로, 나머지는 글 */
 export function richRuns(text: string, rPr = ""): string {
-  let out = "", at = 0;
-  for (const m of text.matchAll(TOKEN)) {
-    if (m.index! > at) out += run(text.slice(at, m.index), rPr);
-    out += tokenRuns(m[0], rPr);
-    at = m.index! + m[0].length;
-  }
-  return out + (at < text.length ? run(text.slice(at), rPr) : "");
+  return richParts(text).map((p) => run(p.t, p.v ? `${rPr}<w:vertAlign w:val="${p.v === "sub" ? "subscript" : "superscript"}"/>` : rPr)).join("");
 }
 
 /**
- * 식 블록의 한 줄 → 문단. "기호 : 뜻" 은 기호만 수식, 한글 설명 줄(= 이 없는 줄)은 글, 나머지는 한 줄 전체가 수식.
+ * 식 블록의 한 줄 → 문단들. "기호 : 뜻" 은 기호만 첨자, 한글 설명 줄(= 이 없는 줄)은 글(math 거짓), 나머지는 한 줄 전체가 수식.
  * 한 줄에 식이 둘("A = …        B = …")이면 두 문단으로 — 되읽을 때 빈칸이 하나로 줄어 곱처럼 보이지 않게.
  */
-function formulaParas(line: string): string[] {
-  if (/^[^가-힣\s][^가-힣]*?\s+:\s+/.test(line)) return [para(richRuns(line), "FormulaText")];     // 기호 : 뜻
-  if (/[가-힣]/.test(line) && !/=/.test(line)) return [para(richRuns(line), "FormulaText")];      // 설명 줄
-  return splitEquations(line).flatMap((eq) => wrapEquation(eq)).map((eq) => para(displayMath(eq), "Formula"));
+export function formulaLines(line: string): { text: string; math: boolean }[] {
+  if (/^[^가-힣\s][^가-힣]*?\s+:\s+/.test(line)) return [{ text: line, math: false }];     // 기호 : 뜻
+  if (/[가-힣]/.test(line) && !/=/.test(line)) return [{ text: line, math: false }];      // 설명 줄
+  return splitEquations(line).flatMap((eq) => wrapEquation(eq)).map((text) => ({ text, math: true }));
 }
+const formulaParas = (line: string) => formulaLines(line).map((l) => (l.math ? para(displayMath(l.text), "Formula") : para(richRuns(l.text), "FormulaText")));
 
 /** 식에서 보이는 글자 수 — 첨자 표시(_ ^ { })는 빼고 센다 */
 const visible = (s: string) => s.replace(/[_^{}]/g, "").length;
@@ -234,14 +233,15 @@ const CRC = (() => {
 })();
 export const crc32 = (b: Uint8Array) => { let c = 0xffffffff; for (const x of b) c = CRC[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
 
-export function zipStore(files: [string, Uint8Array][]): Uint8Array {
+/** utf8Names — 이름이 UTF-8 이라는 표시(flag 0x800). 한글(.hwpx)은 한글이 만든 파일처럼 끈다(이름이 모두 영문) */
+export function zipStore(files: [string, Uint8Array][], utf8Names = true): Uint8Array {
   const parts: Uint8Array[] = [], central: Uint8Array[] = [];
   let offset = 0;
   const header = (size: number, fill: (v: DataView) => void) => { const b = new Uint8Array(size); fill(new DataView(b.buffer)); return b; };
   for (const [name, data] of files) {
     const nm = new TextEncoder().encode(name), crc = crc32(data);
     const common = (v: DataView, o: number) => {
-      v.setUint16(o, 20, true); v.setUint16(o + 2, 0x0800, true); v.setUint16(o + 4, 0, true);   // 버전 · UTF-8 이름 · stored
+      v.setUint16(o, 20, true); v.setUint16(o + 2, utf8Names ? 0x0800 : 0, true); v.setUint16(o + 4, 0, true);   // 버전 · UTF-8 이름 · stored
       v.setUint16(o + 6, 0, true); v.setUint16(o + 8, 0x21, true);                               // 시각 00:00 · 날짜 1980-01-01
       v.setUint32(o + 10, crc, true); v.setUint32(o + 14, data.length, true); v.setUint32(o + 18, data.length, true);
       v.setUint16(o + 22, nm.length, true); v.setUint16(o + 24, 0, true);
